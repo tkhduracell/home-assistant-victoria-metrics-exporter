@@ -15,7 +15,7 @@ RETRY_BACKOFF_BASE = 1  # seconds
 
 def _escape_tag_value(value: str) -> str:
     """Escape special characters in InfluxDB line protocol tag values."""
-    return value.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
+    return value.replace("\\", "\\\\").replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
 
 
 def _escape_measurement(name: str) -> str:
