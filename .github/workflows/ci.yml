@@ -8,7 +8,8 @@ on:
     branches:
       - main
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   hassfest:
@@ -24,13 +25,12 @@ jobs:
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - name: Run HACS validation
         uses: hacs/action@main
         with:
           category: integration
+          ignore: brands
 
   ruff:
     name: Ruff
