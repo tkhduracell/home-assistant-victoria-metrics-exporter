@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "codeowners": ["@tkhduracell"],
   "config_flow": true,
-  "documentation": "https://github.com/tkhduracell/home-assistant-ngenic",
+  "documentation": "https://github.com/tkhduracell/home-assistant-victoria-metrics-exporter",
   "homeassistant": "2024.1.0",
   "iot_class": "local_push",
   "requirements": []
