@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Victoria Metrics",
+        "description": "Enter the connection details for your Victoria Metrics instance.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "ssl": "Use SSL",
+          "verify_ssl": "Verify SSL certificate",
+          "token": "Bearer token (vmauth)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Victoria Metrics. Check host and port.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Victoria Metrics instance is already configured."
+    }
+  }
+}

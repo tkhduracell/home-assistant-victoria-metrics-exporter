@@ -8,6 +8,7 @@ from typing import Callable
 
 import voluptuous as vol
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
 from homeassistant.helpers import config_validation as cv, discovery
 from homeassistant.helpers.event import (
@@ -30,7 +31,6 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_METRIC_PREFIX,
-    DEFAULT_PORT,
     DOMAIN,
     STATE_MAP,
 )
@@ -46,15 +46,12 @@ ENTITY_SCHEMA = vol.Schema(
     }
 )
 
+# YAML schema — entity mappings and export settings only.
+# Connection settings (host, port, token) come from the config flow UI.
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
-                vol.Required(CONF_HOST): cv.string,
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-                vol.Optional(CONF_SSL, default=False): cv.boolean,
-                vol.Optional(CONF_VERIFY_SSL, default=True): cv.boolean,
-                vol.Optional(CONF_TOKEN): cv.string,
                 vol.Optional(
                     CONF_METRIC_PREFIX, default=DEFAULT_METRIC_PREFIX
                 ): cv.string,
@@ -325,36 +322,16 @@ class ExportManager:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up Victoria Metrics Exporter from YAML configuration."""
+    """Set up Victoria Metrics Exporter — parse YAML entity mappings."""
+    hass.data.setdefault(DOMAIN, {})
+
+    if DOMAIN not in config:
+        return True
+
     conf = config[DOMAIN]
-
-    writer = VictoriaMetricsWriter(
-        host=conf[CONF_HOST],
-        port=conf[CONF_PORT],
-        ssl=conf[CONF_SSL],
-        verify_ssl=conf[CONF_VERIFY_SSL],
-        token=conf.get(CONF_TOKEN),
-    )
-
-    if not await writer.test_connection():
-        _LOGGER.error(
-            "Cannot connect to Victoria Metrics at %s:%s. "
-            "Integration will not start.",
-            conf[CONF_HOST],
-            conf[CONF_PORT],
-        )
-        await writer.close()
-        return False
-
-    _LOGGER.info(
-        "Connected to Victoria Metrics at %s:%s",
-        conf[CONF_HOST],
-        conf[CONF_PORT],
-    )
-
-    prefix = conf[CONF_METRIC_PREFIX]
-    batch_interval = conf[CONF_BATCH_INTERVAL]
-    entities_conf = conf[CONF_ENTITIES]
+    prefix = conf.get(CONF_METRIC_PREFIX, DEFAULT_METRIC_PREFIX)
+    batch_interval = conf.get(CONF_BATCH_INTERVAL, DEFAULT_BATCH_INTERVAL)
+    entities_conf = conf.get(CONF_ENTITIES, {})
 
     entity_configs: dict[str, EntityConfig] = {}
     for entity_id, ent_conf in entities_conf.items():
@@ -368,21 +345,79 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             realtime=ent_conf.get(CONF_REALTIME, False),
         )
 
+    # Store YAML config for use by async_setup_entry
+    hass.data[DOMAIN]["yaml_entity_configs"] = entity_configs
+    hass.data[DOMAIN]["yaml_batch_interval"] = batch_interval
+    hass.data[DOMAIN]["yaml_config"] = config
+
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Victoria Metrics connection from config entry (UI)."""
+    writer = VictoriaMetricsWriter(
+        host=entry.data[CONF_HOST],
+        port=entry.data[CONF_PORT],
+        ssl=entry.data.get(CONF_SSL, False),
+        verify_ssl=entry.data.get(CONF_VERIFY_SSL, True),
+        token=entry.data.get(CONF_TOKEN) or None,
+    )
+
+    if not await writer.test_connection():
+        _LOGGER.error(
+            "Cannot connect to Victoria Metrics at %s:%s",
+            entry.data[CONF_HOST],
+            entry.data[CONF_PORT],
+        )
+        await writer.close()
+        return False
+
+    _LOGGER.info(
+        "Connected to Victoria Metrics at %s:%s",
+        entry.data[CONF_HOST],
+        entry.data[CONF_PORT],
+    )
+
+    # Get entity configs from YAML (parsed in async_setup)
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    entity_configs = domain_data.get("yaml_entity_configs", {})
+    batch_interval = domain_data.get("yaml_batch_interval", DEFAULT_BATCH_INTERVAL)
+    yaml_config = domain_data.get("yaml_config", {})
+
+    if not entity_configs:
+        _LOGGER.warning(
+            "No entity mappings found in configuration.yaml under '%s'. "
+            "Add entities to start exporting metrics.",
+            DOMAIN,
+        )
+
     manager = ExportManager(hass, writer, entity_configs, batch_interval)
     manager.start()
 
-    hass.data[DOMAIN] = {"manager": manager}
+    domain_data["manager"] = manager
+    domain_data["entry_id"] = entry.entry_id
 
     async def _shutdown(_event=None) -> None:
         await manager.shutdown()
 
     hass.bus.async_listen_once("homeassistant_stop", _shutdown)
 
+    # Load sensor and switch platforms
     hass.async_create_task(
-        discovery.async_load_platform(hass, "sensor", DOMAIN, {}, config)
+        discovery.async_load_platform(hass, "sensor", DOMAIN, {}, yaml_config)
     )
     hass.async_create_task(
-        discovery.async_load_platform(hass, "switch", DOMAIN, {}, config)
+        discovery.async_load_platform(hass, "switch", DOMAIN, {}, yaml_config)
     )
 
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    domain_data = hass.data.get(DOMAIN, {})
+    manager = domain_data.get("manager")
+    if manager:
+        await manager.shutdown()
+        domain_data.pop("manager", None)
     return True
