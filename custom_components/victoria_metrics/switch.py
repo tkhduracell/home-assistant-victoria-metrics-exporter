@@ -6,17 +6,17 @@ real-time and batch export mode.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from typing import TYPE_CHECKING
-
 from .const import DOMAIN
 
 if TYPE_CHECKING:
-    from . import ExportManager
+    from . import EntityConfig, ExportManager
 
 
 async def async_setup_platform(
@@ -47,7 +47,7 @@ class VictoriaMetricsRealtimeSwitch(SwitchEntity):
     _attr_has_entity_name = False
     _attr_icon = "mdi:timer-sync-outline"
 
-    def __init__(self, entity_config, manager: ExportManager) -> None:
+    def __init__(self, entity_config: EntityConfig, manager: ExportManager) -> None:
         """Initialize the real-time mode switch."""
         self._ec = entity_config
         self._manager = manager
@@ -70,12 +70,12 @@ class VictoriaMetricsRealtimeSwitch(SwitchEntity):
         """Return true if entity is in real-time mode."""
         return self._ec.realtime
 
-    async def async_turn_on(self, **kwargs) -> None:
+    async def async_turn_on(self, **kwargs: Any) -> None:
         """Switch entity to real-time export mode."""
         self._manager.set_realtime(self._ec.entity_id, True)
         self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs) -> None:
+    async def async_turn_off(self, **kwargs: Any) -> None:
         """Switch entity to batch export mode."""
         self._manager.set_realtime(self._ec.entity_id, False)
         self.async_write_ha_state()

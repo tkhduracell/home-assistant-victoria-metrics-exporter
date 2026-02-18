@@ -5,6 +5,7 @@
   "codeowners": ["@tkhduracell"],
   "config_flow": true,
   "documentation": "https://github.com/tkhduracell/home-assistant-ngenic",
+  "homeassistant": "2024.1.0",
   "iot_class": "local_push",
   "requirements": []
 }

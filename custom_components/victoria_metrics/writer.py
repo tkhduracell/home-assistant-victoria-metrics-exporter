@@ -15,7 +15,12 @@ RETRY_BACKOFF_BASE = 1  # seconds
 
 def _escape_tag_value(value: str) -> str:
     """Escape special characters in InfluxDB line protocol tag values."""
-    return value.replace("\\", "\\\\").replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
+    return (
+        value.replace("\\", "\\\\")
+        .replace(" ", "\\ ")
+        .replace(",", "\\,")
+        .replace("=", "\\=")
+    )
 
 
 def _escape_measurement(name: str) -> str:
@@ -49,7 +54,7 @@ class VictoriaMetricsWriter:
             if self._token:
                 headers["Authorization"] = f"Bearer {self._token}"
 
-            connector = aiohttp.TCPConnector(ssl=self._verify_ssl if self._verify_ssl else False)
+            connector = aiohttp.TCPConnector(ssl=self._verify_ssl or False)
             self._session = aiohttp.ClientSession(
                 headers=headers,
                 connector=connector,
@@ -65,8 +70,10 @@ class VictoriaMetricsWriter:
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 return resp.status == 200
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            _LOGGER.error("Failed to connect to Victoria Metrics at %s: %s", self._base_url, err)
+        except (TimeoutError, aiohttp.ClientError) as err:
+            _LOGGER.error(
+                "Failed to connect to Victoria Metrics at %s: %s", self._base_url, err
+            )
             return False
 
     @staticmethod
@@ -85,7 +92,9 @@ class VictoriaMetricsWriter:
         tag_parts = []
         for key, val in sorted(tags.items()):
             if val:
-                tag_parts.append(f"{_escape_tag_value(key)}={_escape_tag_value(str(val))}")
+                tag_parts.append(
+                    f"{_escape_tag_value(key)}={_escape_tag_value(str(val))}"
+                )
 
         tag_str = "," + ",".join(tag_parts) if tag_parts else ""
 
@@ -106,7 +115,7 @@ class VictoriaMetricsWriter:
                     data=data.encode("utf-8"),
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
-                    if resp.status == 204 or resp.status == 200:
+                    if resp.status in {200, 204}:
                         return True
                     if resp.status == 401:
                         _LOGGER.error(
@@ -121,7 +130,7 @@ class VictoriaMetricsWriter:
                         body[:200],
                     )
                     return False
-            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            except (TimeoutError, aiohttp.ClientError) as err:
                 if attempt < MAX_RETRIES - 1:
                     wait = RETRY_BACKOFF_BASE * (2**attempt)
                     _LOGGER.debug(

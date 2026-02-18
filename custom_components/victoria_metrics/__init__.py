@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
-import logging
+from collections.abc import Callable
 from datetime import timedelta
-from typing import Callable
-
-import voluptuous as vol
+import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
+from homeassistant.core import (
+    CALLBACK_TYPE,
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.helpers import config_validation as cv, discovery
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
 )
 from homeassistant.helpers.typing import ConfigType
+import voluptuous as vol
 
 from .const import (
     CONF_BATCH_INTERVAL,
@@ -74,7 +80,9 @@ def _build_metric_name(prefix: str, entity_id: str, override: str | None) -> str
     return f"{prefix}_{domain}_{object_id}"
 
 
-def _build_tags(entity_id: str, state: State, extra_tags: dict[str, str]) -> dict[str, str]:
+def _build_tags(
+    entity_id: str, state: State, extra_tags: dict[str, str]
+) -> dict[str, str]:
     """Build tag dict for a state object."""
     domain = entity_id.split(".", 1)[0]
     tags: dict[str, str] = {
@@ -122,7 +130,7 @@ def _state_to_timestamp_ns(state: State) -> int:
 class EntityConfig:
     """Parsed entity configuration."""
 
-    __slots__ = ("entity_id", "metric_name", "extra_tags", "realtime")
+    __slots__ = ("entity_id", "extra_tags", "metric_name", "realtime")
 
     def __init__(
         self,
@@ -183,7 +191,7 @@ class ExportManager:
         """Register a real-time state change listener for one entity."""
 
         @callback
-        def _handle_realtime(event: Event) -> None:
+        def _handle_realtime(event: Event[EventStateChangedData]) -> None:
             new_state: State | None = event.data.get("new_state")
             if new_state is None:
                 return
@@ -192,16 +200,14 @@ class ExportManager:
             if line is not None:
                 self.hass.async_create_task(self.writer.write_single(line))
 
-        unsub = async_track_state_change_event(
-            self.hass, [entity_id], _handle_realtime
-        )
+        unsub = async_track_state_change_event(self.hass, [entity_id], _handle_realtime)
         self._entity_unsubs[entity_id] = unsub
 
     def _register_batch(self, entity_id: str) -> None:
         """Register a batch state change listener for one entity."""
 
         @callback
-        def _handle_batch(event: Event) -> None:
+        def _handle_batch(event: Event[EventStateChangedData]) -> None:
             new_state: State | None = event.data.get("new_state")
             if new_state is None:
                 return
@@ -210,9 +216,7 @@ class ExportManager:
             if line is not None:
                 self.batch_buffer[eid] = line
 
-        unsub = async_track_state_change_event(
-            self.hass, [entity_id], _handle_batch
-        )
+        unsub = async_track_state_change_event(self.hass, [entity_id], _handle_batch)
         self._entity_unsubs[entity_id] = unsub
 
     def start(self) -> None:
@@ -223,18 +227,12 @@ class ExportManager:
             else:
                 self._register_batch(entity_id)
 
-        has_batch = any(
-            not ec.realtime for ec in self.entity_configs.values()
-        )
+        has_batch = any(not ec.realtime for ec in self.entity_configs.values())
         if has_batch:
             self._start_batch_timer()
 
-        realtime_ids = [
-            eid for eid, ec in self.entity_configs.items() if ec.realtime
-        ]
-        batch_ids = [
-            eid for eid, ec in self.entity_configs.items() if not ec.realtime
-        ]
+        realtime_ids = [eid for eid, ec in self.entity_configs.items() if ec.realtime]
+        batch_ids = [eid for eid, ec in self.entity_configs.items() if not ec.realtime]
         if realtime_ids:
             _LOGGER.info(
                 "Tracking %d entities in real-time mode: %s",
@@ -259,9 +257,7 @@ class ExportManager:
 
     def _stop_batch_timer_if_unused(self) -> None:
         """Stop the batch timer if no entities use batch mode."""
-        has_batch = any(
-            not ec.realtime for ec in self.entity_configs.values()
-        )
+        has_batch = any(not ec.realtime for ec in self.entity_configs.values())
         if not has_batch and self._batch_timer_unsub is not None:
             self._batch_timer_unsub()
             self._batch_timer_unsub = None
@@ -298,7 +294,7 @@ class ExportManager:
         _LOGGER.info("Switched %s to %s mode", entity_id, mode_str)
         self._notify_mode_change(entity_id, realtime)
 
-    async def _flush_batch(self, _now=None) -> None:
+    async def _flush_batch(self, _now: object = None) -> None:
         """Flush the batch buffer to Victoria Metrics."""
         if not self.batch_buffer:
             return
@@ -397,7 +393,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data["manager"] = manager
     domain_data["entry_id"] = entry.entry_id
 
-    async def _shutdown(_event=None) -> None:
+    async def _shutdown(_event: Event | None = None) -> None:
         await manager.shutdown()
 
     hass.bus.async_listen_once("homeassistant_stop", _shutdown)

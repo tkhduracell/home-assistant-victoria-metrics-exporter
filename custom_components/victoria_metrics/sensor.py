@@ -6,17 +6,17 @@ all entity-to-metric mappings in the HA UI.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from typing import TYPE_CHECKING
-
 from .const import DOMAIN
 
 if TYPE_CHECKING:
-    from . import ExportManager
+    from . import EntityConfig, ExportManager
 
 
 async def async_setup_platform(
@@ -47,7 +47,7 @@ class VictoriaMetricsExportSensor(SensorEntity):
     _attr_has_entity_name = False
     _attr_icon = "mdi:chart-line"
 
-    def __init__(self, entity_config, manager: ExportManager) -> None:
+    def __init__(self, entity_config: EntityConfig, manager: ExportManager) -> None:
         """Initialize the export mapping sensor."""
         self._ec = entity_config
         self._manager = manager
@@ -61,7 +61,7 @@ class VictoriaMetricsExportSensor(SensorEntity):
         return self._ec.metric_name
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return details about this export mapping."""
         return {
             "source_entity": self._ec.entity_id,

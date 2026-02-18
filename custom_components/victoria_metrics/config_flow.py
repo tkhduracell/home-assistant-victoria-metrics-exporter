@@ -5,10 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 import voluptuous as vol
-
-from homeassistant.config_entries import ConfigFlow
-from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
     CONF_HOST,
@@ -41,7 +39,7 @@ class VictoriaMetricsConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step — connection settings."""
         errors: dict[str, str] = {}
 
