@@ -11,9 +11,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
+from typing import TYPE_CHECKING
+
 from .const import DOMAIN
 
-if False:  # TYPE_CHECKING
+if TYPE_CHECKING:
     from . import ExportManager
 
 
