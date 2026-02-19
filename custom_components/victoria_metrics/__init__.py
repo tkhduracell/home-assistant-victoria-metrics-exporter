@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import timedelta
 import logging
+import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -176,7 +177,7 @@ class EntityConfig:
 
 
 class ExportManager:
-    """Manages per-entity export listeners and the batch buffer."""
+    """Manages per-entity export listeners and periodic state sampling."""
 
     def __init__(
         self,
@@ -189,7 +190,6 @@ class ExportManager:
         self.writer = writer
         self.entity_configs = entity_configs
         self.batch_interval = batch_interval
-        self.batch_buffer: dict[str, str] = {}
         self._entity_unsubs: dict[str, CALLBACK_TYPE] = {}
         self._batch_timers: dict[int, CALLBACK_TYPE] = {}
         self._mode_change_listeners: list[Callable[[str, bool], None]] = []
@@ -203,8 +203,10 @@ class ExportManager:
         for listener in self._mode_change_listeners:
             listener(entity_id, realtime)
 
-    def _format_state_line(self, entity_id: str, state: State) -> str | None:
-        """Format a state change into an InfluxDB line protocol string."""
+    def _format_state_line(
+        self, entity_id: str, state: State, *, timestamp_ns: int | None = None
+    ) -> str | None:
+        """Format a state into an InfluxDB line protocol string."""
         ec = self.entity_configs.get(entity_id)
         if ec is None:
             return None
@@ -214,8 +216,8 @@ class ExportManager:
             return None
 
         tags = _build_tags(entity_id, state, ec.extra_tags)
-        timestamp_ns = _state_to_timestamp_ns(state)
-        return self.writer.format_line(ec.metric_name, tags, value, timestamp_ns)
+        ts = timestamp_ns if timestamp_ns is not None else _state_to_timestamp_ns(state)
+        return self.writer.format_line(ec.metric_name, tags, value, ts)
 
     def _register_realtime(self, entity_id: str) -> None:
         """Register a real-time state change listener for one entity."""
@@ -233,29 +235,11 @@ class ExportManager:
         unsub = async_track_state_change_event(self.hass, [entity_id], _handle_realtime)
         self._entity_unsubs[entity_id] = unsub
 
-    def _register_batch(self, entity_id: str) -> None:
-        """Register a batch state change listener for one entity."""
-
-        @callback
-        def _handle_batch(event: Event[EventStateChangedData]) -> None:
-            new_state: State | None = event.data.get("new_state")
-            if new_state is None:
-                return
-            eid = event.data.get("entity_id", "")
-            line = self._format_state_line(eid, new_state)
-            if line is not None:
-                self.batch_buffer[eid] = line
-
-        unsub = async_track_state_change_event(self.hass, [entity_id], _handle_batch)
-        self._entity_unsubs[entity_id] = unsub
-
     def start(self) -> None:
         """Register all listeners based on current entity configs."""
         for entity_id, ec in self.entity_configs.items():
             if ec.realtime:
                 self._register_realtime(entity_id)
-            else:
-                self._register_batch(entity_id)
 
         self._sync_batch_timers()
 
@@ -276,9 +260,7 @@ class ExportManager:
 
     def _get_needed_batch_intervals(self) -> set[int]:
         """Return the set of batch intervals currently in use."""
-        return {
-            ec.batch_interval for ec in self.entity_configs.values() if not ec.realtime
-        }
+        return {ec.batch_interval for ec in self.entity_configs.values()}
 
     def _sync_batch_timers(self) -> None:
         """Ensure one timer is running per unique batch interval in use."""
@@ -299,19 +281,23 @@ class ExportManager:
                 )
 
     def _make_flush_callback(self, interval: int) -> Callable[..., Any]:
-        """Create a flush callback for a specific batch interval."""
+        """Create a periodic sampling callback for a specific batch interval."""
 
         async def _flush(_now: object = None) -> None:
             entity_ids = {
                 eid
                 for eid, ec in self.entity_configs.items()
-                if not ec.realtime and ec.batch_interval == interval
+                if ec.batch_interval == interval
             }
-            lines = [
-                self.batch_buffer.pop(eid)
-                for eid in entity_ids
-                if eid in self.batch_buffer
-            ]
+            now_ns = int(time.time() * 1e9)
+            lines: list[str] = []
+            for eid in entity_ids:
+                state = self.hass.states.get(eid)
+                if state is None:
+                    continue
+                line = self._format_state_line(eid, state, timestamp_ns=now_ns)
+                if line is not None:
+                    lines.append(line)
             if lines:
                 await self.writer.write_batch(lines)
 
@@ -327,21 +313,16 @@ class ExportManager:
         if ec.realtime == realtime:
             return
 
-        # Unsubscribe current listener
+        # Unsubscribe current listener (only realtime entities have listeners)
         if entity_id in self._entity_unsubs:
             self._entity_unsubs[entity_id]()
             del self._entity_unsubs[entity_id]
 
-        # Remove from batch buffer if switching to realtime
-        if realtime:
-            self.batch_buffer.pop(entity_id, None)
-
-        # Update config and register new listener
+        # Update config and register new listener if switching to realtime
         ec.realtime = realtime
         if realtime:
             self._register_realtime(entity_id)
-        else:
-            self._register_batch(entity_id)
+        # Batch: no listener needed, periodic timer handles sampling
 
         self._sync_batch_timers()
 
@@ -361,17 +342,8 @@ class ExportManager:
         self._sync_batch_timers()
         _LOGGER.info("Changed batch interval for %s to %ds", entity_id, interval)
 
-    async def _flush_batch(self, _now: object = None) -> None:
-        """Flush all remaining batch buffer data."""
-        if not self.batch_buffer:
-            return
-
-        lines = list(self.batch_buffer.values())
-        self.batch_buffer.clear()
-        await self.writer.write_batch(lines)
-
     async def shutdown(self) -> None:
-        """Clean up all listeners and flush remaining data."""
+        """Clean up all listeners and send final sample."""
         for unsub in self._entity_unsubs.values():
             unsub()
         self._entity_unsubs.clear()
@@ -380,7 +352,18 @@ class ExportManager:
             unsub()
         self._batch_timers.clear()
 
-        await self._flush_batch()
+        # Final sample of all entities before closing
+        now_ns = int(time.time() * 1e9)
+        lines: list[str] = []
+        for eid in self.entity_configs:
+            state = self.hass.states.get(eid)
+            if state is None:
+                continue
+            line = self._format_state_line(eid, state, timestamp_ns=now_ns)
+            if line is not None:
+                lines.append(line)
+        if lines:
+            await self.writer.write_batch(lines)
         await self.writer.close()
 
 
