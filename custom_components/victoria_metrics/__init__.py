@@ -384,8 +384,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Register sidebar panel early so it shows even during connection retries
     if not domain_data.get("panel_registered"):
-        await async_register_panel(hass)
-        domain_data["panel_registered"] = True
+        try:
+            await async_register_panel(hass)
+        except (ValueError, KeyError, OSError):
+            _LOGGER.warning("Failed to register sidebar panel", exc_info=True)
+        else:
+            domain_data["panel_registered"] = True
 
     writer = VictoriaMetricsWriter(
         host=entry.data[CONF_HOST],
