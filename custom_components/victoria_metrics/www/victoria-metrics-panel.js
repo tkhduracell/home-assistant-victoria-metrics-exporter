@@ -507,12 +507,13 @@ class VictoriaMetricsPanel extends HTMLElement {
       }
       modeCell += '</div>';
 
+      const displayName = this._formatDisplayName(r.sourceEntity);
       tableRows +=
         "<tr>" +
         '<td class="entity-id">' + escapeHtml(r.sourceEntity) + "</td>" +
         "<td>" +
           '<a class="entity-link" data-entity="' + escapeHtml(r.sourceEntity) + '" href="#">' +
-            escapeHtml(r.friendlyName) +
+            escapeHtml(displayName) +
           "</a>" +
         "</td>" +
         '<td class="metric-name">' + escapeHtml(r.metricName) + "</td>" +
@@ -622,6 +623,59 @@ class VictoriaMetricsPanel extends HTMLElement {
     }
   }
 
+  _formatDisplayName(entityId) {
+    if (!this._hass) return entityId;
+
+    const state = this._hass.states[entityId];
+    const friendlyName = state ? (state.attributes.friendly_name || "") : "";
+    if (!friendlyName) return entityId;
+
+    const entities = this._hass.entities;
+    const devices = this._hass.devices;
+    const entityEntry = entities ? entities[entityId] : null;
+    if (!entityEntry || !entityEntry.device_id) return friendlyName;
+
+    const device = devices ? devices[entityEntry.device_id] : null;
+    if (!device || !device.name) return friendlyName;
+
+    const deviceName = device.name_by_user || device.name;
+
+    // Split entity-specific name from device name
+    var entityPart = "";
+    if (friendlyName.startsWith(deviceName + " ")) {
+      entityPart = friendlyName.substring(deviceName.length + 1);
+    } else if (friendlyName === deviceName) {
+      entityPart = "";
+    } else {
+      return friendlyName;
+    }
+
+    // Try to split manufacturer+model prefix from device name
+    var devicePart = deviceName;
+    var prefixPart = "";
+
+    if (device.manufacturer && device.model) {
+      var fullPrefix = device.manufacturer + " " + device.model;
+      if (deviceName.startsWith(fullPrefix + " ") && deviceName !== fullPrefix) {
+        prefixPart = fullPrefix;
+        devicePart = deviceName.substring(fullPrefix.length + 1);
+      } else if (deviceName.startsWith(device.model + " ") && deviceName !== device.model) {
+        prefixPart = device.model;
+        devicePart = deviceName.substring(device.model.length + 1);
+      }
+    } else if (device.model && deviceName.startsWith(device.model + " ") && deviceName !== device.model) {
+      prefixPart = device.model;
+      devicePart = deviceName.substring(device.model.length + 1);
+    }
+
+    var parts = [];
+    if (prefixPart) parts.push(prefixPart);
+    parts.push(devicePart);
+    if (entityPart) parts.push(entityPart);
+
+    return parts.join(" / ");
+  }
+
   _updateDropdown() {
     if (!this._hass || this._searchQuery.length < 2) {
       this._closeDropdown();
@@ -655,9 +709,10 @@ class VictoriaMetricsPanel extends HTMLElement {
 
     let html = "";
     for (const m of matches) {
+      const displayName = this._formatDisplayName(m.entityId);
       html +=
         '<div class="dropdown-item" data-entity="' + escapeHtml(m.entityId) + '">' +
-          '<span class="entity-name">' + escapeHtml(m.friendlyName || m.entityId) + "</span>" +
+          '<span class="entity-name">' + escapeHtml(displayName) + "</span>" +
           '<span class="entity-detail">' + escapeHtml(m.entityId) + "</span>" +
         "</div>";
     }

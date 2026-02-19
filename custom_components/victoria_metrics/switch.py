@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -38,6 +39,7 @@ class VictoriaMetricsRealtimeSwitch(SwitchEntity):
     """Switch to toggle real-time export for a configured entity."""
 
     _attr_has_entity_name = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:timer-sync-outline"
 
     def __init__(self, entity_config: EntityConfig, manager: ExportManager) -> None:
