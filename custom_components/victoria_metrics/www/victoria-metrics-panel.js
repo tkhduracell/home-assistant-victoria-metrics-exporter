@@ -219,13 +219,12 @@ class VictoriaMetricsPanel extends HTMLElement {
     this._configEntities = [];
     this._saving = false;
     this._searchQuery = "";
+    this._configLoadPending = false;
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (!this._config) {
-      this._loadConfig();
-    }
+    this._scheduleConfigLoad();
     this._updateIfChanged();
   }
 
@@ -298,15 +297,29 @@ class VictoriaMetricsPanel extends HTMLElement {
     this.shadowRoot.appendChild(this._cardEl);
   }
 
+  _scheduleConfigLoad() {
+    if (this._configLoadPending) return;
+    this._configLoadPending = true;
+    var self = this;
+    Promise.resolve().then(function () {
+      self._configLoadPending = false;
+      self._loadConfig();
+    });
+  }
+
   async _loadConfig() {
-    if (!this._hass || this._config) return;
+    if (!this._hass) return;
     try {
-      const result = await this._hass.connection.sendMessagePromise({
+      var result = await this._hass.connection.sendMessagePromise({
         type: "victoria_metrics/get_config",
       });
+      var newEntities = result.entities.map(function (e) { return e.entity_id; });
+      var changed = JSON.stringify(newEntities) !== JSON.stringify(this._configEntities);
       this._config = result;
-      this._configEntities = result.entities.map(function (e) { return e.entity_id; });
-      this._updateIfChanged();
+      this._configEntities = newEntities;
+      if (changed) {
+        this._updateIfChanged();
+      }
     } catch (_err) {
       // Config entry may not exist yet
     }
@@ -503,15 +516,13 @@ class VictoriaMetricsPanel extends HTMLElement {
         type: "victoria_metrics/save_entities",
         entities: entities,
       });
-      // Reload config from backend after save
-      this._config = null;
+      // Optimistically update local state while reload completes
       this._configEntities = entities;
-      // Small delay for the reload to complete
-      await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+      // Wait for the integration reload to complete, then refresh config
+      await new Promise(function (resolve) { setTimeout(resolve, 2000); });
       await this._loadConfig();
     } catch (_err) {
-      // Revert on error
-      this._config = null;
+      // Refresh config from backend on error
       await this._loadConfig();
     } finally {
       this._saving = false;
