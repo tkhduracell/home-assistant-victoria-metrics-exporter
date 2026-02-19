@@ -32,7 +32,7 @@
           "export_entities": "Entities to export"
         },
         "data_description": {
-          "metric_prefix": "Prefix for all metric names (e.g. 'hass' produces 'hass_sensor_temperature').",
+          "metric_prefix": "Prefix for all metric names (e.g. 'ha' produces 'ha_sensor_temperature'). Leave empty for no prefix.",
           "batch_interval": "How often to flush batch metrics to Victoria Metrics.",
           "export_entities": "Select the entities whose state changes should be exported."
         }

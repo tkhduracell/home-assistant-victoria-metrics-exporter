@@ -82,7 +82,9 @@ def _build_metric_name(prefix: str, entity_id: str, override: str | None) -> str
     if override:
         return override
     domain, object_id = entity_id.split(".", 1)
-    return f"{prefix}_{domain}_{object_id}"
+    if prefix:
+        return f"{prefix}_{domain}_{object_id}"
+    return f"{domain}_{object_id}"
 
 
 def _build_tags(
