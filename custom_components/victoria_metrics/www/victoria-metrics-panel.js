@@ -452,7 +452,7 @@ class VictoriaMetricsPanel extends HTMLElement {
       });
     }
 
-    rows.sort(function (a, b) { return a.sourceEntity.localeCompare(b.sourceEntity); });
+    rows.sort(function (a, b) { return a.friendlyName.localeCompare(b.friendlyName); });
     return rows;
   }
 
