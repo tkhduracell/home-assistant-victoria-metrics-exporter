@@ -635,6 +635,8 @@ class VictoriaMetricsPanel extends HTMLElement {
     for (const entityId of Object.keys(states)) {
       // Skip entities already exported
       if (this._configEntities.indexOf(entityId) >= 0) continue;
+      // Skip VM integration's own entities
+      if (entityId.startsWith("sensor.vm_export_") || entityId.startsWith("switch.vm_realtime_")) continue;
 
       const state = states[entityId];
       const friendlyName = state.attributes.friendly_name || "";
