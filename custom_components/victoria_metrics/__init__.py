@@ -45,6 +45,7 @@ from .const import (
     build_metric_name,
 )
 from .panel import async_register_panel, async_unregister_panel
+from .websocket import async_register_websocket_commands
 from .writer import VictoriaMetricsWriter
 
 _LOGGER = logging.getLogger(__name__)
@@ -341,6 +342,7 @@ class ExportManager:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Victoria Metrics Exporter — parse YAML entity mappings."""
     hass.data.setdefault(DOMAIN, {})
+    async_register_websocket_commands(hass)
 
     if DOMAIN not in config:
         return True
