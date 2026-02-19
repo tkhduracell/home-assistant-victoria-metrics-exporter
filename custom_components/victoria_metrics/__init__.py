@@ -25,6 +25,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.typing import ConfigType
 import voluptuous as vol
 
+from .attributes import extract_attribute_lines
 from .const import (
     CONF_BATCH_INTERVAL,
     CONF_ENTITIES,
@@ -203,21 +204,31 @@ class ExportManager:
         for listener in self._mode_change_listeners:
             listener(entity_id, realtime)
 
-    def _format_state_line(
+    def _format_state_lines(
         self, entity_id: str, state: State, *, timestamp_ns: int | None = None
-    ) -> str | None:
-        """Format a state into an InfluxDB line protocol string."""
+    ) -> list[str]:
+        """Format a state and its attributes into InfluxDB line protocol strings."""
         ec = self.entity_configs.get(entity_id)
         if ec is None:
-            return None
-
-        value = _process_state(state.state)
-        if value is None:
-            return None
+            return []
 
         tags = _build_tags(entity_id, state, ec.extra_tags)
         ts = timestamp_ns if timestamp_ns is not None else _state_to_timestamp_ns(state)
-        return self.writer.format_line(ec.metric_name, tags, value, ts)
+        lines: list[str] = []
+
+        # Primary state line
+        value = _process_state(state.state)
+        if value is not None:
+            lines.append(self.writer.format_line(ec.metric_name, tags, value, ts))
+
+        # Domain-specific attribute lines
+        lines.extend(
+            extract_attribute_lines(
+                state, ec.metric_name, tags, ts, self.writer.format_line
+            )
+        )
+
+        return lines
 
     def _register_realtime(self, entity_id: str) -> None:
         """Register a real-time state change listener for one entity."""
@@ -228,9 +239,9 @@ class ExportManager:
             if new_state is None:
                 return
             eid = event.data.get("entity_id", "")
-            line = self._format_state_line(eid, new_state)
-            if line is not None:
-                self.hass.async_create_task(self.writer.write_single(line))
+            lines = self._format_state_lines(eid, new_state)
+            if lines:
+                self.hass.async_create_task(self.writer.write_batch(lines))
 
         unsub = async_track_state_change_event(self.hass, [entity_id], _handle_realtime)
         self._entity_unsubs[entity_id] = unsub
@@ -295,9 +306,7 @@ class ExportManager:
                 state = self.hass.states.get(eid)
                 if state is None:
                     continue
-                line = self._format_state_line(eid, state, timestamp_ns=now_ns)
-                if line is not None:
-                    lines.append(line)
+                lines.extend(self._format_state_lines(eid, state, timestamp_ns=now_ns))
             if lines:
                 await self.writer.write_batch(lines)
 
@@ -359,9 +368,7 @@ class ExportManager:
             state = self.hass.states.get(eid)
             if state is None:
                 continue
-            line = self._format_state_line(eid, state, timestamp_ns=now_ns)
-            if line is not None:
-                lines.append(line)
+            lines.extend(self._format_state_lines(eid, state, timestamp_ns=now_ns))
         if lines:
             await self.writer.write_batch(lines)
         await self.writer.close()
