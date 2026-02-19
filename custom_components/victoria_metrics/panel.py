@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -14,11 +15,16 @@ from .const import DOMAIN, PANEL_COMPONENT_NAME, PANEL_ICON, PANEL_TITLE, PANEL_
 
 _LOGGER = logging.getLogger(__name__)
 
-_PANEL_FRONTEND_PATH = str(Path(__file__).parent / "www")
+_PANEL_DIR = Path(__file__).parent / "www"
+_PANEL_FRONTEND_PATH = str(_PANEL_DIR)
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
     """Register the Victoria Metrics sidebar panel."""
+    # Compute content hash for cache busting
+    js_path = _PANEL_DIR / f"{PANEL_COMPONENT_NAME}.js"
+    file_hash = hashlib.sha256(js_path.read_bytes()).hexdigest()[:8]
+
     await hass.http.async_register_static_paths(
         [StaticPathConfig(PANEL_URL, _PANEL_FRONTEND_PATH, cache_headers=False)]
     )
@@ -29,7 +35,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         frontend_url_path=DOMAIN,
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
-        module_url=f"{PANEL_URL}/{PANEL_COMPONENT_NAME}.js",
+        module_url=f"{PANEL_URL}/{PANEL_COMPONENT_NAME}.js?h={file_hash}",
         embed_iframe=False,
         require_admin=False,
         config={},

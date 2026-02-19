@@ -12,6 +12,7 @@ from homeassistant.config_entries import (
     OptionsFlowWithConfigEntry,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
@@ -120,6 +121,15 @@ class VictoriaMetricsOptionsFlowHandler(OptionsFlowWithConfigEntry):
             self._user_input = user_input
             return await self.async_step_preview()
 
+        # Exclude our own integration entities from the entity picker
+        ent_reg = er.async_get(self.hass)
+        vm_entity_ids = [
+            entry.entity_id
+            for entry in ent_reg.entities.get_entries_for_config_entry_id(
+                self.config_entry.entry_id
+            )
+        ]
+
         options_schema = vol.Schema(
             {
                 vol.Optional(
@@ -141,7 +151,12 @@ class VictoriaMetricsOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 vol.Optional(
                     CONF_EXPORT_ENTITIES,
                     default=[],
-                ): EntitySelector(EntitySelectorConfig(multiple=True)),
+                ): EntitySelector(
+                    EntitySelectorConfig(
+                        multiple=True,
+                        exclude_entities=vm_entity_ids,
+                    )
+                ),
             }
         )
 

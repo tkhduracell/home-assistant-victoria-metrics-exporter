@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -38,6 +39,7 @@ class VictoriaMetricsExportSensor(SensorEntity):
     """Sensor showing the outgoing VM metric name for a configured entity."""
 
     _attr_has_entity_name = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:chart-line"
 
     def __init__(self, entity_config: EntityConfig, manager: ExportManager) -> None:
