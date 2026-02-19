@@ -18,6 +18,7 @@ CONF_METRIC_NAME = "metric_name"
 CONF_TAGS = "tags"
 CONF_REALTIME = "realtime"
 CONF_EXPORT_ENTITIES = "export_entities"
+CONF_ENTITY_SETTINGS = "entity_settings"
 
 DEFAULT_PORT = 8428
 DEFAULT_BATCH_INTERVAL = 300
@@ -52,7 +53,7 @@ def build_metric_name(prefix: str, entity_id: str, override: str | None = None) 
     """Build metric name from entity_id or use override."""
     if override:
         return override
-    domain, object_id = entity_id.split(".", 1)
+    _domain, object_id = entity_id.split(".", 1)
     if prefix:
-        return f"{prefix}_{domain}_{object_id}"
-    return f"{domain}_{object_id}"
+        return f"{prefix}_{object_id}"
+    return object_id

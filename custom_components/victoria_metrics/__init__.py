@@ -27,6 +27,7 @@ import voluptuous as vol
 from .const import (
     CONF_BATCH_INTERVAL,
     CONF_ENTITIES,
+    CONF_ENTITY_SETTINGS,
     CONF_EXPORT_ENTITIES,
     CONF_HOST,
     CONF_METRIC_NAME,
@@ -130,29 +131,34 @@ def _build_entity_configs_from_options(
 ) -> tuple[dict[str, EntityConfig], int]:
     """Build EntityConfig dict from config entry options.
 
-    Returns (entity_configs, batch_interval).
+    Returns (entity_configs, global_batch_interval).
     """
     prefix = options.get(CONF_METRIC_PREFIX, DEFAULT_METRIC_PREFIX)
-    batch_interval = int(options.get(CONF_BATCH_INTERVAL, DEFAULT_BATCH_INTERVAL))
+    global_batch_interval = int(
+        options.get(CONF_BATCH_INTERVAL, DEFAULT_BATCH_INTERVAL)
+    )
     entity_ids: list[str] = options.get(CONF_EXPORT_ENTITIES, [])
+    entity_settings: dict[str, dict[str, Any]] = options.get(CONF_ENTITY_SETTINGS, {})
 
     entity_configs: dict[str, EntityConfig] = {}
     for entity_id in entity_ids:
         metric_name = build_metric_name(prefix, entity_id)
+        settings = entity_settings.get(entity_id, {})
         entity_configs[entity_id] = EntityConfig(
             entity_id=entity_id,
             metric_name=metric_name,
             extra_tags={},
-            realtime=False,
+            realtime=settings.get("realtime", False),
+            batch_interval=int(settings.get("batch_interval", global_batch_interval)),
         )
 
-    return entity_configs, batch_interval
+    return entity_configs, global_batch_interval
 
 
 class EntityConfig:
     """Parsed entity configuration."""
 
-    __slots__ = ("entity_id", "extra_tags", "metric_name", "realtime")
+    __slots__ = ("batch_interval", "entity_id", "extra_tags", "metric_name", "realtime")
 
     def __init__(
         self,
@@ -160,11 +166,13 @@ class EntityConfig:
         metric_name: str,
         extra_tags: dict[str, str],
         realtime: bool,
+        batch_interval: int = DEFAULT_BATCH_INTERVAL,
     ) -> None:
         self.entity_id = entity_id
         self.metric_name = metric_name
         self.extra_tags = extra_tags
         self.realtime = realtime
+        self.batch_interval = batch_interval
 
 
 class ExportManager:
@@ -183,7 +191,7 @@ class ExportManager:
         self.batch_interval = batch_interval
         self.batch_buffer: dict[str, str] = {}
         self._entity_unsubs: dict[str, CALLBACK_TYPE] = {}
-        self._batch_timer_unsub: CALLBACK_TYPE | None = None
+        self._batch_timers: dict[int, CALLBACK_TYPE] = {}
         self._mode_change_listeners: list[Callable[[str, bool], None]] = []
 
     def on_mode_change(self, listener: Callable[[str, bool], None]) -> None:
@@ -249,9 +257,7 @@ class ExportManager:
             else:
                 self._register_batch(entity_id)
 
-        has_batch = any(not ec.realtime for ec in self.entity_configs.values())
-        if has_batch:
-            self._start_batch_timer()
+        self._sync_batch_timers()
 
         realtime_ids = [eid for eid, ec in self.entity_configs.items() if ec.realtime]
         batch_ids = [eid for eid, ec in self.entity_configs.items() if not ec.realtime]
@@ -263,26 +269,53 @@ class ExportManager:
             )
         if batch_ids:
             _LOGGER.info(
-                "Tracking %d entities in batch mode (interval: %ds): %s",
+                "Tracking %d entities in batch mode: %s",
                 len(batch_ids),
-                self.batch_interval,
                 ", ".join(batch_ids),
             )
 
-    def _start_batch_timer(self) -> None:
-        """Start the batch flush timer if not already running."""
-        if self._batch_timer_unsub is not None:
-            return
-        self._batch_timer_unsub = async_track_time_interval(
-            self.hass, self._flush_batch, timedelta(seconds=self.batch_interval)
-        )
+    def _get_needed_batch_intervals(self) -> set[int]:
+        """Return the set of batch intervals currently in use."""
+        return {
+            ec.batch_interval for ec in self.entity_configs.values() if not ec.realtime
+        }
 
-    def _stop_batch_timer_if_unused(self) -> None:
-        """Stop the batch timer if no entities use batch mode."""
-        has_batch = any(not ec.realtime for ec in self.entity_configs.values())
-        if not has_batch and self._batch_timer_unsub is not None:
-            self._batch_timer_unsub()
-            self._batch_timer_unsub = None
+    def _sync_batch_timers(self) -> None:
+        """Ensure one timer is running per unique batch interval in use."""
+        needed = self._get_needed_batch_intervals()
+
+        # Stop timers that are no longer needed
+        for interval in list(self._batch_timers):
+            if interval not in needed:
+                self._batch_timers.pop(interval)()
+
+        # Start timers that are missing
+        for interval in needed:
+            if interval not in self._batch_timers:
+                self._batch_timers[interval] = async_track_time_interval(
+                    self.hass,
+                    self._make_flush_callback(interval),
+                    timedelta(seconds=interval),
+                )
+
+    def _make_flush_callback(self, interval: int) -> Callable[..., Any]:
+        """Create a flush callback for a specific batch interval."""
+
+        async def _flush(_now: object = None) -> None:
+            entity_ids = {
+                eid
+                for eid, ec in self.entity_configs.items()
+                if not ec.realtime and ec.batch_interval == interval
+            }
+            lines = [
+                self.batch_buffer.pop(eid)
+                for eid in entity_ids
+                if eid in self.batch_buffer
+            ]
+            if lines:
+                await self.writer.write_batch(lines)
+
+        return _flush
 
     @callback
     def set_realtime(self, entity_id: str, realtime: bool) -> None:
@@ -307,17 +340,29 @@ class ExportManager:
         ec.realtime = realtime
         if realtime:
             self._register_realtime(entity_id)
-            self._stop_batch_timer_if_unused()
         else:
             self._register_batch(entity_id)
-            self._start_batch_timer()
+
+        self._sync_batch_timers()
 
         mode_str = "real-time" if realtime else "batch"
         _LOGGER.info("Switched %s to %s mode", entity_id, mode_str)
         self._notify_mode_change(entity_id, realtime)
 
+    @callback
+    def set_batch_interval(self, entity_id: str, interval: int) -> None:
+        """Change the batch flush interval for an entity."""
+        ec = self.entity_configs.get(entity_id)
+        if ec is None:
+            return
+        if ec.batch_interval == interval:
+            return
+        ec.batch_interval = interval
+        self._sync_batch_timers()
+        _LOGGER.info("Changed batch interval for %s to %ds", entity_id, interval)
+
     async def _flush_batch(self, _now: object = None) -> None:
-        """Flush the batch buffer to Victoria Metrics."""
+        """Flush all remaining batch buffer data."""
         if not self.batch_buffer:
             return
 
@@ -331,9 +376,9 @@ class ExportManager:
             unsub()
         self._entity_unsubs.clear()
 
-        if self._batch_timer_unsub is not None:
-            self._batch_timer_unsub()
-            self._batch_timer_unsub = None
+        for unsub in self._batch_timers.values():
+            unsub()
+        self._batch_timers.clear()
 
         await self._flush_batch()
         await self.writer.close()
