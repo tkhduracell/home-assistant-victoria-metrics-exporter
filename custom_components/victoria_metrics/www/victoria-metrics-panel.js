@@ -11,7 +11,7 @@ const STYLES = `
   .header {
     display: flex;
     align-items: center;
-    gap: 12px;
+    justify-content: space-between;
     margin-bottom: 24px;
   }
   h1 {
@@ -26,6 +26,85 @@ const STYLES = `
     box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0, 0, 0, 0.1));
     padding: 0;
     overflow-x: auto;
+  }
+  .add-section {
+    background: var(--ha-card-background, var(--card-background-color));
+    border-radius: var(--ha-card-border-radius, 12px);
+    box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0, 0, 0, 0.1));
+    padding: 16px;
+    margin-bottom: 16px;
+    position: relative;
+  }
+  .add-section label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--secondary-text-color);
+    margin-bottom: 8px;
+  }
+  .search-wrapper {
+    position: relative;
+  }
+  .search-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    background: var(--primary-background-color);
+    color: var(--primary-text-color);
+    font-size: 14px;
+    box-sizing: border-box;
+    outline: none;
+  }
+  .search-input:focus {
+    border-color: var(--primary-color);
+  }
+  .search-input::placeholder {
+    color: var(--secondary-text-color);
+  }
+  .dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--ha-card-background, var(--card-background-color));
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    margin-top: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    display: none;
+  }
+  .dropdown.open {
+    display: block;
+  }
+  .dropdown-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-bottom: 1px solid var(--divider-color);
+  }
+  .dropdown-item:last-child {
+    border-bottom: none;
+  }
+  .dropdown-item:hover {
+    background: var(--table-row-alternative-background-color,
+                    rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04));
+  }
+  .dropdown-item .entity-name {
+    color: var(--primary-text-color);
+  }
+  .dropdown-item .entity-detail {
+    font-size: 12px;
+    color: var(--secondary-text-color);
+    font-family: var(--code-font-family, monospace);
   }
   table {
     width: 100%;
@@ -86,6 +165,20 @@ const STYLES = `
     font-size: 12px;
     color: var(--secondary-text-color);
   }
+  .remove-btn {
+    background: none;
+    border: none;
+    color: var(--error-color, #db4437);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    opacity: 0.7;
+  }
+  .remove-btn:hover {
+    opacity: 1;
+    background: rgba(var(--rgb-error-color, 219, 68, 55), 0.1);
+  }
   .empty-state {
     text-align: center;
     padding: 48px 16px;
@@ -99,6 +192,10 @@ const STYLES = `
     font-size: 14px;
     color: var(--secondary-text-color);
     margin-bottom: 12px;
+  }
+  .saving {
+    opacity: 0.6;
+    pointer-events: none;
   }
 `;
 
@@ -118,10 +215,17 @@ class VictoriaMetricsPanel extends HTMLElement {
     this._panel = null;
     this._lastDataJson = "";
     this._initialized = false;
+    this._config = null;
+    this._configEntities = [];
+    this._saving = false;
+    this._searchQuery = "";
   }
 
   set hass(hass) {
     this._hass = hass;
+    if (!this._config) {
+      this._loadConfig();
+    }
     this._updateIfChanged();
   }
 
@@ -155,6 +259,36 @@ class VictoriaMetricsPanel extends HTMLElement {
     header.innerHTML = "<h1>Victoria Metrics Exports</h1>";
     this.shadowRoot.appendChild(header);
 
+    // Entity search/add section
+    this._addSection = document.createElement("div");
+    this._addSection.className = "add-section";
+    this._addSection.innerHTML =
+      "<label>Add Entity to Export</label>" +
+      '<div class="search-wrapper">' +
+        '<input type="text" class="search-input" placeholder="Search entities to add...">' +
+        '<div class="dropdown"></div>' +
+      "</div>";
+    this.shadowRoot.appendChild(this._addSection);
+
+    this._searchInput = this._addSection.querySelector(".search-input");
+    this._dropdown = this._addSection.querySelector(".dropdown");
+
+    this._searchInput.addEventListener("input", () => {
+      this._searchQuery = this._searchInput.value;
+      this._updateDropdown();
+    });
+    this._searchInput.addEventListener("focus", () => {
+      if (this._searchQuery.length >= 2) {
+        this._updateDropdown();
+      }
+    });
+    // Close dropdown on outside click
+    this.shadowRoot.addEventListener("click", (e) => {
+      if (!this._addSection.contains(e.target)) {
+        this._closeDropdown();
+      }
+    });
+
     this._countEl = document.createElement("div");
     this._countEl.className = "count";
     this.shadowRoot.appendChild(this._countEl);
@@ -164,39 +298,56 @@ class VictoriaMetricsPanel extends HTMLElement {
     this.shadowRoot.appendChild(this._cardEl);
   }
 
+  async _loadConfig() {
+    if (!this._hass || this._config) return;
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "victoria_metrics/get_config",
+      });
+      this._config = result;
+      this._configEntities = result.entities.map(function (e) { return e.entity_id; });
+      this._updateIfChanged();
+    } catch (_err) {
+      // Config entry may not exist yet
+    }
+  }
+
   _getExportData() {
-    if (!this._hass) return [];
+    if (!this._hass || !this._config) return [];
 
     const states = this._hass.states;
     const rows = [];
 
-    for (const entityId of Object.keys(states)) {
-      if (!entityId.startsWith("sensor.vm_export_")) continue;
-
-      const sensor = states[entityId];
-      const attrs = sensor.attributes;
-      const sourceEntity = attrs.source_entity || "";
-      const metricName = attrs.metric_name || sensor.state || "";
-      const mode = attrs.mode || "batch";
-      const customTags = attrs.custom_tags || {};
-
-      const sourceState = states[sourceEntity];
+    for (const item of this._config.entities) {
+      const entityId = item.entity_id;
+      const metricName = item.metric_name;
+      const sourceState = states[entityId];
       const friendlyName = sourceState
-        ? sourceState.attributes.friendly_name || sourceEntity
-        : sourceEntity;
+        ? sourceState.attributes.friendly_name || entityId
+        : entityId;
+
+      // Check the sensor entity for mode info
+      const sensorId = "sensor.vm_export_" + entityId.replace(".", "_");
+      const sensorState = states[sensorId];
+      const mode = sensorState
+        ? sensorState.attributes.mode || "batch"
+        : "batch";
+      const customTags = sensorState
+        ? sensorState.attributes.custom_tags || {}
+        : {};
 
       rows.push({
-        sourceEntity,
-        friendlyName,
-        metricName,
-        mode,
+        sourceEntity: entityId,
+        friendlyName: friendlyName,
+        metricName: metricName,
+        mode: mode,
         customTags: Object.entries(customTags)
-          .map(([k, v]) => k + "=" + v)
+          .map(function (pair) { return pair[0] + "=" + pair[1]; })
           .join(", "),
       });
     }
 
-    rows.sort((a, b) => a.sourceEntity.localeCompare(b.sourceEntity));
+    rows.sort(function (a, b) { return a.sourceEntity.localeCompare(b.sourceEntity); });
     return rows;
   }
 
@@ -215,11 +366,11 @@ class VictoriaMetricsPanel extends HTMLElement {
   _renderData(rows) {
     if (rows.length === 0) {
       this._countEl.textContent = "";
-      this._cardEl.innerHTML = `
-        <div class="empty-state">
-          <p>No entities are configured for export.</p>
-          <p>Go to <b>Settings &gt; Devices &amp; Services &gt; Victoria Metrics &gt; Configure</b> to select entities.</p>
-        </div>`;
+      this._cardEl.innerHTML =
+        '<div class="empty-state">' +
+          "<p>No entities are configured for export.</p>" +
+          "<p>Use the search box above to add entities.</p>" +
+        "</div>";
       return;
     }
 
@@ -240,6 +391,11 @@ class VictoriaMetricsPanel extends HTMLElement {
           "</span>" +
         "</td>" +
         '<td class="tags">' + (r.customTags ? escapeHtml(r.customTags) : "\u2014") + "</td>" +
+        "<td>" +
+          '<button class="remove-btn" data-entity="' + escapeHtml(r.sourceEntity) + '">' +
+            "Remove" +
+          "</button>" +
+        "</td>" +
         "</tr>";
     }
 
@@ -251,9 +407,116 @@ class VictoriaMetricsPanel extends HTMLElement {
           "<th>Metric Name</th>" +
           "<th>Mode</th>" +
           "<th>Tags</th>" +
+          "<th></th>" +
         "</tr></thead>" +
         "<tbody>" + tableRows + "</tbody>" +
       "</table>";
+
+    // Attach remove button handlers
+    const self = this;
+    this._cardEl.querySelectorAll(".remove-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const entityId = btn.getAttribute("data-entity");
+        self._removeEntity(entityId);
+      });
+    });
+  }
+
+  _updateDropdown() {
+    if (!this._hass || this._searchQuery.length < 2) {
+      this._closeDropdown();
+      return;
+    }
+
+    const query = this._searchQuery.toLowerCase();
+    const states = this._hass.states;
+    const matches = [];
+
+    for (const entityId of Object.keys(states)) {
+      // Skip entities already exported
+      if (this._configEntities.indexOf(entityId) >= 0) continue;
+
+      const state = states[entityId];
+      const friendlyName = state.attributes.friendly_name || "";
+      const searchText = entityId + " " + friendlyName.toLowerCase();
+
+      if (searchText.indexOf(query) >= 0) {
+        matches.push({ entityId: entityId, friendlyName: friendlyName });
+      }
+      if (matches.length >= 10) break;
+    }
+
+    if (matches.length === 0) {
+      this._closeDropdown();
+      return;
+    }
+
+    let html = "";
+    for (const m of matches) {
+      html +=
+        '<div class="dropdown-item" data-entity="' + escapeHtml(m.entityId) + '">' +
+          '<span class="entity-name">' + escapeHtml(m.friendlyName || m.entityId) + "</span>" +
+          '<span class="entity-detail">' + escapeHtml(m.entityId) + "</span>" +
+        "</div>";
+    }
+
+    this._dropdown.innerHTML = html;
+    this._dropdown.classList.add("open");
+
+    const self = this;
+    this._dropdown.querySelectorAll(".dropdown-item").forEach(function (item) {
+      item.addEventListener("click", function () {
+        const entityId = item.getAttribute("data-entity");
+        self._addEntity(entityId);
+      });
+    });
+  }
+
+  _closeDropdown() {
+    if (this._dropdown) {
+      this._dropdown.classList.remove("open");
+    }
+  }
+
+  async _addEntity(entityId) {
+    if (this._saving || this._configEntities.indexOf(entityId) >= 0) return;
+    const newEntities = this._configEntities.concat([entityId]);
+    await this._saveEntities(newEntities);
+    this._searchInput.value = "";
+    this._searchQuery = "";
+    this._closeDropdown();
+  }
+
+  async _removeEntity(entityId) {
+    if (this._saving) return;
+    const newEntities = this._configEntities.filter(function (e) { return e !== entityId; });
+    await this._saveEntities(newEntities);
+  }
+
+  async _saveEntities(entities) {
+    if (!this._hass) return;
+    this._saving = true;
+    this._cardEl.classList.add("saving");
+
+    try {
+      await this._hass.connection.sendMessagePromise({
+        type: "victoria_metrics/save_entities",
+        entities: entities,
+      });
+      // Reload config from backend after save
+      this._config = null;
+      this._configEntities = entities;
+      // Small delay for the reload to complete
+      await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+      await this._loadConfig();
+    } catch (_err) {
+      // Revert on error
+      this._config = null;
+      await this._loadConfig();
+    } finally {
+      this._saving = false;
+      this._cardEl.classList.remove("saving");
+    }
   }
 }
 
