@@ -44,6 +44,7 @@ from .const import (
     STATE_MAP,
     build_metric_name,
 )
+from .panel import async_register_panel, async_unregister_panel
 from .writer import VictoriaMetricsWriter
 
 _LOGGER = logging.getLogger(__name__)
@@ -421,6 +422,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "writer": writer,
     }
 
+    # Register sidebar panel once
+    if not domain_data.get("panel_registered"):
+        await async_register_panel(hass)
+        domain_data["panel_registered"] = True
+
     # Forward platform setup
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -437,5 +443,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         manager = entry_data.get("manager")
         if manager:
             await manager.shutdown()
+
+    # Remove sidebar panel when the last config entry is unloaded
+    _reserved_keys = {"yaml_entity_configs", "yaml_batch_interval", "panel_registered"}
+    remaining = [k for k in domain_data if k not in _reserved_keys]
+    if not remaining and domain_data.get("panel_registered"):
+        async_unregister_panel(hass)
+        domain_data["panel_registered"] = False
 
     return unload_ok
