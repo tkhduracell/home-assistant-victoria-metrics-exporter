@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import timedelta
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
@@ -15,7 +16,7 @@ from homeassistant.core import (
     State,
     callback,
 )
-from homeassistant.helpers import config_validation as cv, discovery
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -26,6 +27,7 @@ import voluptuous as vol
 from .const import (
     CONF_BATCH_INTERVAL,
     CONF_ENTITIES,
+    CONF_EXPORT_ENTITIES,
     CONF_HOST,
     CONF_METRIC_NAME,
     CONF_METRIC_PREFIX,
@@ -38,6 +40,7 @@ from .const import (
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_METRIC_PREFIX,
     DOMAIN,
+    PLATFORMS,
     STATE_MAP,
 )
 from .writer import VictoriaMetricsWriter
@@ -64,7 +67,9 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional(
                     CONF_BATCH_INTERVAL, default=DEFAULT_BATCH_INTERVAL
                 ): cv.positive_int,
-                vol.Required(CONF_ENTITIES): {cv.entity_id: ENTITY_SCHEMA},
+                vol.Optional(CONF_ENTITIES, default={}): {
+                    cv.entity_id: ENTITY_SCHEMA
+                },
             }
         )
     },
@@ -125,6 +130,30 @@ def _process_state(state_value: str) -> float | str | None:
 def _state_to_timestamp_ns(state: State) -> int:
     """Convert state's last_updated to nanoseconds since epoch."""
     return int(state.last_updated.timestamp() * 1e9)
+
+
+def _build_entity_configs_from_options(
+    options: dict[str, Any],
+) -> tuple[dict[str, EntityConfig], int]:
+    """Build EntityConfig dict from config entry options.
+
+    Returns (entity_configs, batch_interval).
+    """
+    prefix = options.get(CONF_METRIC_PREFIX, DEFAULT_METRIC_PREFIX)
+    batch_interval = int(options.get(CONF_BATCH_INTERVAL, DEFAULT_BATCH_INTERVAL))
+    entity_ids: list[str] = options.get(CONF_EXPORT_ENTITIES, [])
+
+    entity_configs: dict[str, EntityConfig] = {}
+    for entity_id in entity_ids:
+        metric_name = _build_metric_name(prefix, entity_id, None)
+        entity_configs[entity_id] = EntityConfig(
+            entity_id=entity_id,
+            metric_name=metric_name,
+            extra_tags={},
+            realtime=False,
+        )
+
+    return entity_configs, batch_interval
 
 
 class EntityConfig:
@@ -341,10 +370,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             realtime=ent_conf.get(CONF_REALTIME, False),
         )
 
-    # Store YAML config for use by async_setup_entry
+    # Store YAML config for use by async_setup_entry as fallback
     hass.data[DOMAIN]["yaml_entity_configs"] = entity_configs
     hass.data[DOMAIN]["yaml_batch_interval"] = batch_interval
-    hass.data[DOMAIN]["yaml_config"] = config
 
     return True
 
@@ -374,46 +402,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.data[CONF_PORT],
     )
 
-    # Get entity configs from YAML (parsed in async_setup)
+    # Determine entity configs: options flow takes priority over YAML
     domain_data = hass.data.setdefault(DOMAIN, {})
-    entity_configs = domain_data.get("yaml_entity_configs", {})
-    batch_interval = domain_data.get("yaml_batch_interval", DEFAULT_BATCH_INTERVAL)
-    yaml_config = domain_data.get("yaml_config", {})
+
+    if CONF_EXPORT_ENTITIES in entry.options:
+        entity_configs, batch_interval = _build_entity_configs_from_options(
+            entry.options
+        )
+    else:
+        # Fallback to YAML config (parsed in async_setup)
+        entity_configs = domain_data.get("yaml_entity_configs", {})
+        batch_interval = domain_data.get(
+            "yaml_batch_interval", DEFAULT_BATCH_INTERVAL
+        )
 
     if not entity_configs:
         _LOGGER.warning(
-            "No entity mappings found in configuration.yaml under '%s'. "
-            "Add entities to start exporting metrics.",
-            DOMAIN,
+            "No entity mappings configured for Victoria Metrics. "
+            "Use Settings > Devices & Services > Victoria Metrics > Configure "
+            "to select entities for export.",
         )
 
     manager = ExportManager(hass, writer, entity_configs, batch_interval)
     manager.start()
 
-    domain_data["manager"] = manager
-    domain_data["entry_id"] = entry.entry_id
+    # Store runtime data keyed by entry_id
+    domain_data[entry.entry_id] = {
+        "manager": manager,
+        "writer": writer,
+    }
 
-    async def _shutdown(_event: Event | None = None) -> None:
-        await manager.shutdown()
-
-    hass.bus.async_listen_once("homeassistant_stop", _shutdown)
-
-    # Load sensor and switch platforms
-    hass.async_create_task(
-        discovery.async_load_platform(hass, "sensor", DOMAIN, {}, yaml_config)
-    )
-    hass.async_create_task(
-        discovery.async_load_platform(hass, "switch", DOMAIN, {}, yaml_config)
-    )
+    # Forward platform setup
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
     domain_data = hass.data.get(DOMAIN, {})
-    manager = domain_data.get("manager")
-    if manager:
-        await manager.shutdown()
-        domain_data.pop("manager", None)
-    return True
+    entry_data = domain_data.pop(entry.entry_id, None)
+    if entry_data:
+        manager = entry_data.get("manager")
+        if manager:
+            await manager.shutdown()
+
+    return unload_ok
