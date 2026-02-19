@@ -20,5 +20,23 @@
     "abort": {
       "already_configured": "This Victoria Metrics instance is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Victoria Metrics Export Settings",
+        "description": "Configure which entities to export and global export settings.",
+        "data": {
+          "metric_prefix": "Metric prefix",
+          "batch_interval": "Batch interval",
+          "export_entities": "Entities to export"
+        },
+        "data_description": {
+          "metric_prefix": "Prefix for all metric names (e.g. 'ha' produces 'ha_sensor_temperature'). Leave empty for no prefix.",
+          "batch_interval": "How often to flush batch metrics to Victoria Metrics.",
+          "export_entities": "Select the entities whose state changes should be exported."
+        }
+      }
+    }
   }
 }

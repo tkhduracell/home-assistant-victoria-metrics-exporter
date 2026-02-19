@@ -9,9 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import DOMAIN
 
@@ -19,21 +19,14 @@ if TYPE_CHECKING:
     from . import EntityConfig, ExportManager
 
 
-async def async_setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up Victoria Metrics real-time mode switches."""
-    if discovery_info is None:
-        return
-
-    data = hass.data.get(DOMAIN)
-    if data is None:
-        return
-
-    manager: ExportManager = data["manager"]
+    """Set up Victoria Metrics real-time mode switches from a config entry."""
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    manager: ExportManager = entry_data["manager"]
     switches = [
         VictoriaMetricsRealtimeSwitch(ec, manager)
         for ec in manager.entity_configs.values()
