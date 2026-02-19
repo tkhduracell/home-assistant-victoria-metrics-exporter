@@ -78,7 +78,7 @@ Describes how data flows between HA and the external system:
 Two entry points:
 
 - **`async_setup(hass, config)`** — Called once on HA startup. Receives the full YAML configuration. Used for YAML-based setup or to parse YAML config before the config entry loads.
-- **`async_setup_entry(hass, entry)`** — Called when a config entry is created or loaded. Receives a `ConfigEntry` with data from the config flow. This is the modern approach. The function initializes clients, registers listeners, and forwards platforms via `async_forward_entry_setups()` or `discovery.async_load_platform()`.
+- **`async_setup_entry(hass, entry)`** — Called when a config entry is created or loaded. Receives a `ConfigEntry` with data from the config flow and options from the options flow. This is the modern approach. The function initializes clients, registers listeners, and forwards platforms via `async_forward_entry_setups()`. Paired with `async_unload_entry()` which calls `async_unload_platforms()` for clean teardown.
 
 ### Config Flow
 
@@ -168,13 +168,13 @@ Exports Home Assistant entity state changes to [Victoria Metrics](https://victor
 ```
 ├── custom_components/victoria_metrics/
 │   ├── __init__.py           # Core logic: setup, ExportManager, state processing
-│   ├── config_flow.py        # UI config flow: host, port, SSL, token
+│   ├── config_flow.py        # Config flow (connection) + options flow (export settings)
 │   ├── const.py              # Constants, defaults, STATE_MAP
 │   ├── writer.py             # HTTP client: InfluxDB line protocol, retries
 │   ├── sensor.py             # Sensor entities showing metric name per export
 │   ├── switch.py             # Switch entities toggling realtime/batch per export
 │   ├── manifest.json         # Integration metadata
-│   ├── strings.json          # UI strings
+│   ├── strings.json          # UI strings (config flow + options flow)
 │   └── translations/en.json  # English translations
 ├── hacs.json                 # HACS metadata
 ├── pyproject.toml            # Ruff + MyPy configuration
@@ -188,9 +188,10 @@ Exports Home Assistant entity state changes to [Victoria Metrics](https://victor
 Defines all configuration keys and defaults:
 
 - Connection: `CONF_HOST`, `CONF_PORT`, `CONF_SSL`, `CONF_VERIFY_SSL`, `CONF_TOKEN`
-- Export: `CONF_METRIC_PREFIX`, `CONF_BATCH_INTERVAL`, `CONF_ENTITIES`
-- Per-entity: `CONF_METRIC_NAME`, `CONF_TAGS`, `CONF_REALTIME`
-- Defaults: port `8428`, batch interval `300s`, metric prefix `"hass"`
+- Export: `CONF_METRIC_PREFIX`, `CONF_BATCH_INTERVAL`, `CONF_ENTITIES`, `CONF_EXPORT_ENTITIES`
+- Per-entity (YAML): `CONF_METRIC_NAME`, `CONF_TAGS`, `CONF_REALTIME`
+- `PLATFORMS`: list of platforms to forward (`[Platform.SENSOR, Platform.SWITCH]`)
+- Defaults: port `8428`, batch interval `300s`, metric prefix `"ha"`
 - `STATE_MAP`: Maps boolean/state strings to numeric values — `on`/`off`, `open`/`closed`, `home`/`not_home`, `locked`/`unlocked`, `active`/`inactive`, `connected`/`disconnected`, `true`/`false`, `yes`/`no` → `1.0`/`0.0`
 
 #### `__init__.py`
@@ -206,22 +207,34 @@ Core integration logic with two main classes:
 - `shutdown()` — Unsubscribes all listeners, flushes remaining data, closes HTTP session
 
 **Key functions:**
-- `_build_metric_name(prefix, entity_id, override)` — Generates `{prefix}_{domain}_{object_id}` or uses a custom override
+- `_build_metric_name(prefix, entity_id, override)` — Generates `{prefix}_{domain}_{object_id}` or uses a custom override. If prefix is empty, omits it: `{domain}_{object_id}`
 - `_build_tags(entity_id, state, extra_tags)` — Produces tag dict with `entity_id`, `domain`, `friendly_name`, `device_class`, `unit`, plus custom tags
 - `_process_state(state_value)` — Converts: numeric strings → float, `STATE_MAP` entries → float, unknown/unavailable → `None` (skipped), other strings → kept as text
 - `_state_to_timestamp_ns(state)` — Converts `last_updated` to nanoseconds since epoch
+- `_build_entity_configs_from_options(options)` — Builds `EntityConfig` dict from options flow data (entity selector list, prefix, batch interval). Returns `(entity_configs, batch_interval)`
 
 **Setup flow:**
-1. `async_setup()` parses YAML entity mappings, builds `EntityConfig` objects, stores in `hass.data[DOMAIN]`
-2. `async_setup_entry()` creates `VictoriaMetricsWriter`, tests connection, creates `ExportManager`, starts listeners, loads sensor + switch platforms, registers shutdown handler
+1. `async_setup()` parses YAML entity mappings, builds `EntityConfig` objects, stores in `hass.data[DOMAIN]` as fallback
+2. `async_setup_entry()` creates `VictoriaMetricsWriter`, tests connection. Then determines entity configs: **options flow takes priority** over YAML fallback. Creates `ExportManager`, starts listeners, forwards sensor + switch platforms via `async_forward_entry_setups()`. Runtime data stored keyed by `entry.entry_id`
+3. `async_unload_entry()` unloads platforms via `async_unload_platforms()`, shuts down manager, removes entry data
 
 #### `config_flow.py`
 
-Single-step UI config flow (`VictoriaMetricsConfigFlow`):
+**`VictoriaMetricsConfigFlow`** — Initial setup (connection):
 - Fields: host (required), port (default 8428), SSL (default off), verify SSL (default on), bearer token (optional)
 - Tests connection via `/health` endpoint before saving
 - Prevents duplicates using `host:port` as unique ID
 - Errors: `cannot_connect`, `unknown`
+- Registers `async_get_options_flow()` to enable the options flow
+
+**`VictoriaMetricsOptionsFlowHandler`** — Options flow for export settings (Settings > Configure):
+- Extends `OptionsFlowWithConfigEntry`
+- Single step (`async_step_init`) with three fields:
+  - `metric_prefix` — Text input (default `"ha"`)
+  - `batch_interval` — Number selector (10–3600 seconds, default 300)
+  - `export_entities` — Entity selector (multi-select, picks which HA entities to export)
+- Uses `add_suggested_values_to_schema()` to pre-populate with current options
+- Saves to `entry.options`, which `async_setup_entry()` reads on next load
 
 #### `writer.py`
 
@@ -239,6 +252,8 @@ Single-step UI config flow (`VictoriaMetricsConfigFlow`):
 #### `sensor.py`
 
 `VictoriaMetricsExportSensor` — One per configured entity:
+- Set up via `async_setup_entry(hass, entry, async_add_entities)` (config entry pattern)
+- Reads manager from `hass.data[DOMAIN][entry.entry_id]`
 - State: the outgoing Victoria Metrics metric name
 - Unique ID: `vm_export_{entity_id_underscored}`
 - Icon: `mdi:chart-line`
@@ -247,6 +262,8 @@ Single-step UI config flow (`VictoriaMetricsConfigFlow`):
 #### `switch.py`
 
 `VictoriaMetricsRealtimeSwitch` — One per configured entity:
+- Set up via `async_setup_entry(hass, entry, async_add_entities)` (config entry pattern)
+- Reads manager from `hass.data[DOMAIN][entry.entry_id]`
 - State: ON = real-time, OFF = batch
 - Unique ID: `vm_realtime_{entity_id_underscored}`
 - Icon: `mdi:timer-sync-outline`
@@ -255,7 +272,7 @@ Single-step UI config flow (`VictoriaMetricsConfigFlow`):
 
 ### Configuration
 
-**UI (config flow)** — Connection settings:
+**Step 1: Config flow UI** — Connection settings (Settings > Devices & Services > Add Integration):
 
 ```
 Host:       victoria-metrics.local
@@ -265,11 +282,21 @@ Verify SSL: true
 Token:      (optional bearer token for vmauth)
 ```
 
-**YAML (configuration.yaml)** — Entity mappings:
+**Step 2: Options flow UI** — Export settings (Settings > Devices & Services > Victoria Metrics > Configure):
+
+```
+Metric prefix:    ha               # Default: "ha"
+Batch interval:   300              # 10–3600 seconds
+Entities to export: [multi-select entity picker]
+```
+
+The options flow is the primary way to configure which entities are exported. Options flow data takes priority over YAML.
+
+**YAML (configuration.yaml)** — Alternative/fallback entity mappings with advanced per-entity settings:
 
 ```yaml
 victoria_metrics:
-  metric_prefix: hass              # Default: "hass"
+  metric_prefix: ha                # Default: "ha"
   batch_interval: 300              # Default: 300 seconds
   entities:
     sensor.living_room_temperature:
@@ -283,17 +310,26 @@ victoria_metrics:
         location: entrance
 ```
 
+YAML config is used as a fallback when no entities are configured via the options flow. YAML provides additional per-entity settings (custom metric names, tags, realtime flag) not available in the options UI.
+
 ### Data Flow
 
 ```
-Entity state change
-  → HA fires state_changed event
-  → ExportManager listener catches event
-  → _process_state() converts value (numeric, STATE_MAP, or string)
-  → _build_tags() assembles tag dict
-  → writer.format_line() produces InfluxDB line protocol string
-  → Real-time: writer.write_single() POSTs immediately
-  → Batch: stores in buffer, writer.write_batch() flushes every N seconds
+Configuration:
+  Options flow UI (entity selector) → entry.options
+    OR YAML configuration.yaml → hass.data[DOMAIN] (fallback)
+  → _build_entity_configs_from_options() or YAML parsing
+  → EntityConfig objects created
+
+Runtime:
+  Entity state change
+    → HA fires state_changed event
+    → ExportManager listener catches event
+    → _process_state() converts value (numeric, STATE_MAP, or string)
+    → _build_tags() assembles tag dict
+    → writer.format_line() produces InfluxDB line protocol string
+    → Real-time: writer.write_single() POSTs immediately
+    → Batch: stores in buffer, writer.write_batch() flushes every N seconds
 ```
 
 ### Export Modes
