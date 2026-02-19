@@ -67,9 +67,7 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional(
                     CONF_BATCH_INTERVAL, default=DEFAULT_BATCH_INTERVAL
                 ): cv.positive_int,
-                vol.Optional(CONF_ENTITIES, default={}): {
-                    cv.entity_id: ENTITY_SCHEMA
-                },
+                vol.Optional(CONF_ENTITIES, default={}): {cv.entity_id: ENTITY_SCHEMA},
             }
         )
     },
@@ -414,9 +412,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         # Fallback to YAML config (parsed in async_setup)
         entity_configs = domain_data.get("yaml_entity_configs", {})
-        batch_interval = domain_data.get(
-            "yaml_batch_interval", DEFAULT_BATCH_INTERVAL
-        )
+        batch_interval = domain_data.get("yaml_batch_interval", DEFAULT_BATCH_INTERVAL)
 
     if not entity_configs:
         _LOGGER.warning(
