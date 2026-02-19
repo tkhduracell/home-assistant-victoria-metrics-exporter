@@ -42,6 +42,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     STATE_MAP,
+    build_metric_name,
 )
 from .writer import VictoriaMetricsWriter
 
@@ -73,16 +74,6 @@ CONFIG_SCHEMA = vol.Schema(
     },
     extra=vol.ALLOW_EXTRA,
 )
-
-
-def _build_metric_name(prefix: str, entity_id: str, override: str | None) -> str:
-    """Build metric name from entity_id or use override."""
-    if override:
-        return override
-    domain, object_id = entity_id.split(".", 1)
-    if prefix:
-        return f"{prefix}_{domain}_{object_id}"
-    return f"{domain}_{object_id}"
 
 
 def _build_tags(
@@ -145,7 +136,7 @@ def _build_entity_configs_from_options(
 
     entity_configs: dict[str, EntityConfig] = {}
     for entity_id in entity_ids:
-        metric_name = _build_metric_name(prefix, entity_id, None)
+        metric_name = build_metric_name(prefix, entity_id)
         entity_configs[entity_id] = EntityConfig(
             entity_id=entity_id,
             metric_name=metric_name,
@@ -360,7 +351,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     entity_configs: dict[str, EntityConfig] = {}
     for entity_id, ent_conf in entities_conf.items():
-        metric_name = _build_metric_name(
+        metric_name = build_metric_name(
             prefix, entity_id, ent_conf.get(CONF_METRIC_NAME)
         )
         entity_configs[entity_id] = EntityConfig(

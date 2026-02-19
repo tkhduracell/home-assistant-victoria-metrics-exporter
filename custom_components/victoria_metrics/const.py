@@ -41,3 +41,13 @@ STATE_MAP = {
     "connected": 1.0,
     "disconnected": 0.0,
 }
+
+
+def build_metric_name(prefix: str, entity_id: str, override: str | None = None) -> str:
+    """Build metric name from entity_id or use override."""
+    if override:
+        return override
+    domain, object_id = entity_id.split(".", 1)
+    if prefix:
+        return f"{prefix}_{domain}_{object_id}"
+    return f"{domain}_{object_id}"
