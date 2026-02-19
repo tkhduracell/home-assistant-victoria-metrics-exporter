@@ -380,6 +380,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Victoria Metrics connection from config entry (UI)."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+
+    # Register sidebar panel early so it shows even during connection retries
+    if not domain_data.get("panel_registered"):
+        await async_register_panel(hass)
+        domain_data["panel_registered"] = True
+
     writer = VictoriaMetricsWriter(
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
@@ -404,8 +411,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     # Determine entity configs: options flow takes priority over YAML
-    domain_data = hass.data.setdefault(DOMAIN, {})
-
     if CONF_EXPORT_ENTITIES in entry.options:
         entity_configs, batch_interval = _build_entity_configs_from_options(
             entry.options
@@ -430,11 +435,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "manager": manager,
         "writer": writer,
     }
-
-    # Register sidebar panel once
-    if not domain_data.get("panel_registered"):
-        await async_register_panel(hass)
-        domain_data["panel_registered"] = True
 
     # Forward platform setup
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
