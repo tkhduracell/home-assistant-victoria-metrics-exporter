@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 import logging
 from typing import Any
@@ -133,7 +133,7 @@ def _state_to_timestamp_ns(state: State) -> int:
 
 
 def _build_entity_configs_from_options(
-    options: dict[str, Any],
+    options: Mapping[str, Any],
 ) -> tuple[dict[str, EntityConfig], int]:
     """Build EntityConfig dict from config entry options.
 
