@@ -36,6 +36,10 @@
           "batch_interval": "How often to flush batch metrics to Victoria Metrics.",
           "export_entities": "Select the entities whose state changes should be exported."
         }
+      },
+      "preview": {
+        "title": "Metric Name Preview",
+        "description": "Review the metric names that will be exported ({entity_count} entities):\n\n{metric_preview}\n\nSubmit to confirm these settings."
       }
     }
   }
