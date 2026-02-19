@@ -23,6 +23,11 @@ DEFAULT_PORT = 8428
 DEFAULT_BATCH_INTERVAL = 300
 DEFAULT_METRIC_PREFIX = "ha"
 
+PANEL_URL = "/victoria_metrics_panel"
+PANEL_COMPONENT_NAME = "victoria-metrics-panel"
+PANEL_TITLE = "Victoria Metrics"
+PANEL_ICON = "mdi:chart-line"
+
 STATE_MAP = {
     "on": 1.0,
     "off": 0.0,
