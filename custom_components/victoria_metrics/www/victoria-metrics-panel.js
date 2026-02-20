@@ -1036,4 +1036,6 @@ class VictoriaMetricsPanel extends HTMLElement {
   }
 }
 
-customElements.define("victoria-metrics-panel", VictoriaMetricsPanel);
+if (!customElements.get("victoria-metrics-panel")) {
+  customElements.define("victoria-metrics-panel", VictoriaMetricsPanel);
+}
