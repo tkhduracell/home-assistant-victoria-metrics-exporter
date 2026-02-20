@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -59,6 +60,10 @@ class VictoriaMetricsConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    _user_input: dict[str, Any] | None = None
+    _connect_task: asyncio.Task[bool] | None = None
+    _connect_error: str | None = None
+
     @staticmethod
     @callback
     def async_get_options_flow(
@@ -73,33 +78,18 @@ class VictoriaMetricsConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle the initial step — connection settings."""
         errors: dict[str, str] = {}
 
+        if self._connect_error is not None:
+            errors["base"] = self._connect_error
+            self._connect_error = None
+
         if user_input is not None:
-            # Prevent duplicate entries for the same host
             await self.async_set_unique_id(
                 f"{user_input[CONF_HOST]}:{user_input[CONF_PORT]}"
             )
             self._abort_if_unique_id_configured()
 
-            # Test the connection
-            writer = VictoriaMetricsWriter(
-                host=user_input[CONF_HOST],
-                port=user_input[CONF_PORT],
-                ssl=user_input.get(CONF_SSL, False),
-                verify_ssl=user_input.get(CONF_VERIFY_SSL, True),
-                token=user_input.get(CONF_TOKEN) or None,
-            )
-
-            try:
-                if await writer.test_connection():
-                    await writer.close()
-                    title = f"Victoria Metrics ({user_input[CONF_HOST]}:{user_input[CONF_PORT]})"
-                    return self.async_create_entry(title=title, data=user_input)
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error during connection test")
-                errors["base"] = "unknown"
-            finally:
-                await writer.close()
+            self._user_input = user_input
+            return await self.async_step_connect()
 
         return self.async_show_form(
             step_id="user",
@@ -107,11 +97,72 @@ class VictoriaMetricsConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def _async_test_connection(self) -> bool:
+        """Run the connection test in a background task."""
+        if self._user_input is None:
+            return False
+        writer = VictoriaMetricsWriter(
+            host=self._user_input[CONF_HOST],
+            port=self._user_input[CONF_PORT],
+            ssl=self._user_input.get(CONF_SSL, False),
+            verify_ssl=self._user_input.get(CONF_VERIFY_SSL, True),
+            token=self._user_input.get(CONF_TOKEN) or None,
+        )
+        try:
+            return await writer.test_connection()
+        finally:
+            await writer.close()
+
+    async def async_step_connect(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Test the connection with a progress spinner."""
+        if self._connect_task is None:
+            self._connect_task = self.hass.async_create_task(
+                self._async_test_connection(),
+                "Victoria Metrics connection test",
+            )
+
+        task = self._connect_task
+
+        if not task.done():
+            return self.async_show_progress(
+                step_id="connect",
+                progress_action="connecting",
+                progress_task=task,
+            )
+
+        self._connect_task = None
+
+        try:
+            result = task.result()
+        except Exception:
+            _LOGGER.exception("Unexpected error during connection test")
+            self._connect_error = "unknown"
+            return self.async_show_progress_done(next_step_id="user")
+
+        if not result:
+            self._connect_error = "cannot_connect"
+            return self.async_show_progress_done(next_step_id="user")
+
+        return self.async_show_progress_done(next_step_id="finish")
+
+    async def async_step_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Create the config entry after successful connection."""
+        if self._user_input is None:
+            return self.async_abort(reason="unknown")
+        title = f"Victoria Metrics ({self._user_input[CONF_HOST]}:{self._user_input[CONF_PORT]})"
+        return self.async_create_entry(title=title, data=self._user_input)
+
 
 class VictoriaMetricsOptionsFlowHandler(OptionsFlowWithConfigEntry):
     """Handle Victoria Metrics options."""
 
     _user_input: dict[str, Any]
+    _save_task: asyncio.Task[bool] | None = None
+    _save_error: str | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -172,7 +223,7 @@ class VictoriaMetricsOptionsFlowHandler(OptionsFlowWithConfigEntry):
     ) -> ConfigFlowResult:
         """Show metric name preview before confirming."""
         if user_input is not None:
-            return self.async_create_entry(data=self._user_input)
+            return await self.async_step_save()
 
         prefix = self._user_input.get(CONF_METRIC_PREFIX, DEFAULT_METRIC_PREFIX)
         entities: list[str] = self._user_input.get(CONF_EXPORT_ENTITIES, [])
@@ -196,4 +247,72 @@ class VictoriaMetricsOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 "entity_count": str(len(entities)),
                 "metric_preview": preview_text,
             },
+        )
+
+    async def _async_validate_connection(self) -> bool:
+        """Revalidate the Victoria Metrics connection before saving."""
+        writer = VictoriaMetricsWriter(
+            host=self.config_entry.data[CONF_HOST],
+            port=self.config_entry.data[CONF_PORT],
+            ssl=self.config_entry.data.get(CONF_SSL, False),
+            verify_ssl=self.config_entry.data.get(CONF_VERIFY_SSL, True),
+            token=self.config_entry.data.get(CONF_TOKEN) or None,
+        )
+        try:
+            return await writer.test_connection()
+        finally:
+            await writer.close()
+
+    async def async_step_save(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Validate connection and save options with a progress spinner."""
+        if self._save_task is None:
+            self._save_task = self.hass.async_create_task(
+                self._async_validate_connection(),
+                "Victoria Metrics connection revalidation",
+            )
+
+        task = self._save_task
+
+        if not task.done():
+            return self.async_show_progress(
+                step_id="save",
+                progress_action="saving",
+                progress_task=task,
+            )
+
+        self._save_task = None
+
+        try:
+            result = task.result()
+        except Exception:
+            _LOGGER.exception("Unexpected error during connection revalidation")
+            self._save_error = "save_failed"
+            return self.async_show_progress_done(next_step_id="save_failed")
+
+        if not result:
+            self._save_error = "cannot_connect"
+            return self.async_show_progress_done(next_step_id="save_failed")
+
+        return self.async_show_progress_done(next_step_id="save_done")
+
+    async def async_step_save_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Finalize saving the options entry."""
+        return self.async_create_entry(data=self._user_input)
+
+    async def async_step_save_failed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle save failure — allow user to retry."""
+        if user_input is not None:
+            self._save_error = None
+            return await self.async_step_init()
+
+        return self.async_show_form(
+            step_id="save_failed",
+            data_schema=vol.Schema({}),
+            errors={"base": self._save_error or "cannot_connect"},
         )
