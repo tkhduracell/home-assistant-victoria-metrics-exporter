@@ -144,8 +144,10 @@ def _build_entity_configs_from_options(
 
     entity_configs: dict[str, EntityConfig] = {}
     for entity_id in entity_ids:
-        metric_name = build_metric_name(prefix, entity_id)
         settings = entity_settings.get(entity_id, {})
+        metric_name = build_metric_name(
+            prefix, entity_id, settings.get("metric_name") or None
+        )
         entity_configs[entity_id] = EntityConfig(
             entity_id=entity_id,
             metric_name=metric_name,
@@ -350,6 +352,17 @@ class ExportManager:
         ec.batch_interval = interval
         self._sync_batch_timers()
         _LOGGER.info("Changed batch interval for %s to %ds", entity_id, interval)
+
+    @callback
+    def set_metric_name(self, entity_id: str, metric_name: str) -> None:
+        """Change the metric name for an entity."""
+        ec = self.entity_configs.get(entity_id)
+        if ec is None:
+            return
+        if ec.metric_name == metric_name:
+            return
+        ec.metric_name = metric_name
+        _LOGGER.info("Changed metric name for %s to %s", entity_id, metric_name)
 
     async def shutdown(self) -> None:
         """Clean up all listeners and send final sample."""
