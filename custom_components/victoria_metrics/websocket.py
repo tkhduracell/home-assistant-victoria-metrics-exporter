@@ -69,10 +69,14 @@ def handle_get_config(
     previews: list[dict[str, Any]] = []
     for entity_id in entities:
         settings = entity_settings.get(entity_id, {})
+        metric_name_override: str = settings.get("metric_name", "")
         previews.append(
             {
                 "entity_id": entity_id,
-                "metric_name": build_metric_name(prefix, entity_id),
+                "metric_name": build_metric_name(
+                    prefix, entity_id, metric_name_override or None
+                ),
+                "metric_name_override": metric_name_override,
                 "realtime": settings.get("realtime", False),
                 "batch_interval": settings.get("batch_interval", batch_interval),
             }
@@ -125,6 +129,7 @@ async def handle_save_entities(
         vol.Required("entity_id"): str,
         vol.Optional("realtime"): bool,
         vol.Optional("batch_interval"): vol.All(int, vol.Range(min=10, max=3600)),
+        vol.Optional("metric_name"): vol.Any(str, None),
     }
 )
 @websocket_api.async_response
@@ -156,6 +161,11 @@ async def handle_update_entity_settings(
         current["realtime"] = msg["realtime"]
     if "batch_interval" in msg:
         current["batch_interval"] = msg["batch_interval"]
+    if "metric_name" in msg:
+        if msg["metric_name"]:
+            current["metric_name"] = msg["metric_name"]
+        else:
+            current.pop("metric_name", None)
 
     entity_settings[entity_id] = current
     new_options[CONF_ENTITY_SETTINGS] = entity_settings
@@ -172,5 +182,10 @@ async def handle_update_entity_settings(
             manager.set_realtime(entity_id, msg["realtime"])
         if "batch_interval" in msg:
             manager.set_batch_interval(entity_id, msg["batch_interval"])
+        if "metric_name" in msg:
+            prefix = entry.options.get(CONF_METRIC_PREFIX, DEFAULT_METRIC_PREFIX)
+            override = msg["metric_name"] or None
+            new_name = build_metric_name(prefix, entity_id, override)
+            manager.set_metric_name(entity_id, new_name)
 
     connection.send_result(msg["id"], {"success": True})

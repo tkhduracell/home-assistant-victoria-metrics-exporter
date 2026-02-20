@@ -153,6 +153,48 @@ const STYLES = `
     font-size: 13px;
     color: var(--primary-color);
   }
+  .metric-name-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .metric-name-text {
+    font-family: var(--code-font-family, monospace);
+    font-size: 13px;
+    color: var(--primary-color);
+  }
+  .metric-name-text.is-override {
+    color: var(--accent-color, #ff9800);
+  }
+  .metric-name-edit-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    opacity: 0.4;
+    color: var(--primary-text-color);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .metric-name-edit-btn:hover {
+    opacity: 0.8;
+  }
+  .metric-name-edit-btn svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+  }
+  .metric-name-input {
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid var(--primary-color);
+    border-radius: 4px;
+    background: var(--primary-background-color);
+    color: var(--primary-text-color);
+    font-size: 13px;
+    font-family: var(--code-font-family, monospace);
+    outline: none;
+  }
   .toggle-wrapper {
     display: flex;
     align-items: center;
@@ -444,6 +486,7 @@ class VictoriaMetricsPanel extends HTMLElement {
         sourceEntity: entityId,
         friendlyName: friendlyName,
         metricName: metricName,
+        metricNameOverride: item.metric_name_override || "",
         realtime: realtime,
         batchInterval: batchInterval,
         customTags: Object.entries(customTags)
@@ -482,8 +525,11 @@ class VictoriaMetricsPanel extends HTMLElement {
     this._countEl.textContent =
       rows.length + " entit" + (rows.length === 1 ? "y" : "ies") + " exported";
 
+    const metricPrefix = this._config ? (this._config.metric_prefix || "") : "";
     let tableRows = "";
     for (const r of rows) {
+      const objId = r.sourceEntity.split(".", 2).pop();
+      const autoMetricName = metricPrefix ? metricPrefix + "_" + objId : objId;
       const checkedAttr = r.realtime ? " checked" : "";
       const modeLabel = r.realtime ? "realtime" : "batch";
 
@@ -516,7 +562,20 @@ class VictoriaMetricsPanel extends HTMLElement {
             escapeHtml(displayName) +
           "</a>" +
         "</td>" +
-        '<td class="metric-name">' + escapeHtml(r.metricName) + "</td>" +
+        '<td class="metric-name">' +
+          '<div class="metric-name-wrapper">' +
+            '<span class="metric-name-text' + (r.metricNameOverride ? ' is-override' : '') + '">' +
+              escapeHtml(r.metricName) +
+            '</span>' +
+            '<button class="metric-name-edit-btn"' +
+              ' data-entity="' + escapeHtml(r.sourceEntity) + '"' +
+              ' data-current-override="' + escapeHtml(r.metricNameOverride) + '"' +
+              ' data-auto-name="' + escapeHtml(autoMetricName) + '"' +
+              ' title="' + (r.metricNameOverride ? 'Edit custom metric name' : 'Set custom metric name') + '">' +
+              '<svg viewBox="0 0 24 24"><path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"/></svg>' +
+            '</button>' +
+          '</div>' +
+        "</td>" +
         "<td>" + modeCell + "</td>" +
         '<td class="tags">' + (r.customTags ? escapeHtml(r.customTags) : "\u2014") + "</td>" +
         "<td>" +
@@ -574,6 +633,17 @@ class VictoriaMetricsPanel extends HTMLElement {
       });
     });
 
+    // Metric name edit button handlers
+    this._cardEl.querySelectorAll(".metric-name-edit-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const entityId = btn.getAttribute("data-entity");
+        const currentOverride = btn.getAttribute("data-current-override");
+        const autoName = btn.getAttribute("data-auto-name");
+        const wrapper = btn.closest(".metric-name-wrapper");
+        self._startMetricNameEdit(wrapper, entityId, currentOverride, autoName);
+      });
+    });
+
     // Friendly name click handlers for more-info dialog
     this._cardEl.querySelectorAll(".entity-link").forEach(function (link) {
       link.addEventListener("click", function (e) {
@@ -607,6 +677,7 @@ class VictoriaMetricsPanel extends HTMLElement {
       };
       if ("realtime" in settings) msg.realtime = settings.realtime;
       if ("batch_interval" in settings) msg.batch_interval = settings.batch_interval;
+      if ("metric_name" in settings) msg.metric_name = settings.metric_name;
 
       await this._hass.connection.sendMessagePromise(msg);
 
@@ -621,6 +692,50 @@ class VictoriaMetricsPanel extends HTMLElement {
       await this._loadConfig();
       this._updateIfChanged();
     }
+  }
+
+  _startMetricNameEdit(wrapper, entityId, currentOverride, autoName) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "metric-name-input";
+    input.value = currentOverride || autoName || entityId;
+    input.placeholder = autoName || entityId;
+
+    wrapper.innerHTML = "";
+    wrapper.appendChild(input);
+    input.focus();
+    input.select();
+
+    const self = this;
+    let saved = false;
+
+    const originalValue = currentOverride || "";
+    function save() {
+      if (saved) return;
+      saved = true;
+      let newValue = input.value.trim();
+      // Treat auto-generated name as "no override"
+      if (newValue === autoName) newValue = "";
+      // Skip save if nothing changed
+      if (newValue === originalValue) {
+        self._lastDataJson = "";
+        self._updateIfChanged();
+        return;
+      }
+      self._updateEntitySetting(entityId, { metric_name: newValue });
+    }
+
+    input.addEventListener("blur", save);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        input.blur();
+      } else if (e.key === "Escape") {
+        saved = true;
+        self._lastDataJson = "";
+        self._updateIfChanged();
+      }
+    });
   }
 
   _formatDisplayName(entityId) {
