@@ -355,14 +355,17 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs:
 ## Quick Reference
 
 ```bash
+# Setup dev environment (also runs automatically via conductor.json)
+python3.12 -m venv .venv && .venv/bin/pip install -q -r requirements_dev.txt
+
 # Lint
-ruff check custom_components/
+.venv/bin/ruff check custom_components/
 
 # Format
-ruff format custom_components/
+.venv/bin/ruff format custom_components/
 
 # Type check
-mypy custom_components/
+.venv/bin/mypy custom_components/victoria_metrics
 ```
 
 - Python target: 3.12
