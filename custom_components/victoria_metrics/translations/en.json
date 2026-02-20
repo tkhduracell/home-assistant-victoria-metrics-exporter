@@ -13,6 +13,9 @@
         }
       }
     },
+    "progress": {
+      "connecting": "Testing connection to Victoria Metrics..."
+    },
     "error": {
       "cannot_connect": "Unable to connect to Victoria Metrics. Check host and port.",
       "unknown": "Unexpected error occurred."
@@ -40,7 +43,18 @@
       "preview": {
         "title": "Metric Name Preview",
         "description": "Review the metric names that will be exported ({entity_count} entities):\n\n{metric_preview}\n\nSubmit to confirm these settings."
+      },
+      "save_failed": {
+        "title": "Save Failed",
+        "description": "Could not save settings. Submit to go back and try again."
       }
+    },
+    "progress": {
+      "saving": "Validating connection and saving settings..."
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Victoria Metrics. The server may be unreachable.",
+      "save_failed": "An unexpected error occurred while saving."
     }
   }
 }
