@@ -17,27 +17,21 @@ from homeassistant.core import (
     State,
     callback,
 )
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
 )
 from homeassistant.helpers.typing import ConfigType
-import voluptuous as vol
 
 from .attributes import extract_attribute_lines
 from .const import (
     CONF_BATCH_INTERVAL,
-    CONF_ENTITIES,
     CONF_ENTITY_SETTINGS,
     CONF_EXPORT_ENTITIES,
     CONF_HOST,
-    CONF_METRIC_NAME,
     CONF_METRIC_PREFIX,
     CONF_PORT,
-    CONF_REALTIME,
     CONF_SSL,
-    CONF_TAGS,
     CONF_TOKEN,
     CONF_VERIFY_SSL,
     DEFAULT_BATCH_INTERVAL,
@@ -53,37 +47,8 @@ from .writer import VictoriaMetricsWriter
 
 _LOGGER = logging.getLogger(__name__)
 
-ENTITY_SCHEMA = vol.Schema(
-    {
-        vol.Optional(CONF_METRIC_NAME): cv.string,
-        vol.Optional(CONF_TAGS, default={}): {cv.string: cv.string},
-        vol.Optional(CONF_REALTIME, default=False): cv.boolean,
-    }
-)
 
-# YAML schema — entity mappings and export settings only.
-# Connection settings (host, port, token) come from the config flow UI.
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Optional(
-                    CONF_METRIC_PREFIX, default=DEFAULT_METRIC_PREFIX
-                ): cv.string,
-                vol.Optional(
-                    CONF_BATCH_INTERVAL, default=DEFAULT_BATCH_INTERVAL
-                ): cv.positive_int,
-                vol.Optional(CONF_ENTITIES, default={}): {cv.entity_id: ENTITY_SCHEMA},
-            }
-        )
-    },
-    extra=vol.ALLOW_EXTRA,
-)
-
-
-def _build_tags(
-    entity_id: str, state: State, extra_tags: dict[str, str]
-) -> dict[str, str]:
+def _build_tags(entity_id: str, state: State) -> dict[str, str]:
     """Build tag dict for a state object."""
     domain = entity_id.split(".", 1)[0]
     tags: dict[str, str] = {
@@ -99,7 +64,6 @@ def _build_tags(
     if unit := attrs.get("unit_of_measurement"):
         tags["unit"] = str(unit)
 
-    tags.update(extra_tags)
     return tags
 
 
@@ -151,7 +115,6 @@ def _build_entity_configs_from_options(
         entity_configs[entity_id] = EntityConfig(
             entity_id=entity_id,
             metric_name=metric_name,
-            extra_tags={},
             realtime=settings.get("realtime", False),
             batch_interval=int(settings.get("batch_interval", global_batch_interval)),
         )
@@ -162,19 +125,17 @@ def _build_entity_configs_from_options(
 class EntityConfig:
     """Parsed entity configuration."""
 
-    __slots__ = ("batch_interval", "entity_id", "extra_tags", "metric_name", "realtime")
+    __slots__ = ("batch_interval", "entity_id", "metric_name", "realtime")
 
     def __init__(
         self,
         entity_id: str,
         metric_name: str,
-        extra_tags: dict[str, str],
         realtime: bool,
         batch_interval: int = DEFAULT_BATCH_INTERVAL,
     ) -> None:
         self.entity_id = entity_id
         self.metric_name = metric_name
-        self.extra_tags = extra_tags
         self.realtime = realtime
         self.batch_interval = batch_interval
 
@@ -214,7 +175,7 @@ class ExportManager:
         if ec is None:
             return []
 
-        tags = _build_tags(entity_id, state, ec.extra_tags)
+        tags = _build_tags(entity_id, state)
         ts = timestamp_ns if timestamp_ns is not None else _state_to_timestamp_ns(state)
         lines: list[str] = []
 
@@ -388,34 +349,9 @@ class ExportManager:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up Victoria Metrics Exporter — parse YAML entity mappings."""
+    """Set up Victoria Metrics Exporter."""
     hass.data.setdefault(DOMAIN, {})
     async_register_websocket_commands(hass)
-
-    if DOMAIN not in config:
-        return True
-
-    conf = config[DOMAIN]
-    prefix = conf.get(CONF_METRIC_PREFIX, DEFAULT_METRIC_PREFIX)
-    batch_interval = conf.get(CONF_BATCH_INTERVAL, DEFAULT_BATCH_INTERVAL)
-    entities_conf = conf.get(CONF_ENTITIES, {})
-
-    entity_configs: dict[str, EntityConfig] = {}
-    for entity_id, ent_conf in entities_conf.items():
-        metric_name = build_metric_name(
-            prefix, entity_id, ent_conf.get(CONF_METRIC_NAME)
-        )
-        entity_configs[entity_id] = EntityConfig(
-            entity_id=entity_id,
-            metric_name=metric_name,
-            extra_tags=ent_conf.get(CONF_TAGS, {}),
-            realtime=ent_conf.get(CONF_REALTIME, False),
-        )
-
-    # Store YAML config for use by async_setup_entry as fallback
-    hass.data[DOMAIN]["yaml_entity_configs"] = entity_configs
-    hass.data[DOMAIN]["yaml_batch_interval"] = batch_interval
-
     return True
 
 
@@ -444,17 +380,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.data[CONF_PORT],
     )
 
-    # Determine entity configs: options flow takes priority over YAML
     domain_data = hass.data.setdefault(DOMAIN, {})
-
-    if CONF_EXPORT_ENTITIES in entry.options:
-        entity_configs, batch_interval = _build_entity_configs_from_options(
-            entry.options
-        )
-    else:
-        # Fallback to YAML config (parsed in async_setup)
-        entity_configs = domain_data.get("yaml_entity_configs", {})
-        batch_interval = domain_data.get("yaml_batch_interval", DEFAULT_BATCH_INTERVAL)
+    entity_configs, batch_interval = _build_entity_configs_from_options(entry.options)
 
     if not entity_configs:
         _LOGGER.warning(
@@ -495,8 +422,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await manager.shutdown()
 
     # Remove sidebar panel when the last config entry is unloaded
-    _reserved_keys = {"yaml_entity_configs", "yaml_batch_interval", "panel_registered"}
-    remaining = [k for k in domain_data if k not in _reserved_keys]
+    remaining = [k for k in domain_data if k != "panel_registered"]
     if not remaining and domain_data.get("panel_registered"):
         async_unregister_panel(hass)
         domain_data["panel_registered"] = False
