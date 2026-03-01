@@ -200,53 +200,10 @@ const STYLES = `
     font-family: var(--code-font-family, monospace);
     outline: none;
   }
-  .toggle-wrapper {
+  .interval-wrapper {
     display: flex;
     align-items: center;
-    gap: 8px;
-  }
-  .toggle {
-    position: relative;
-    width: 36px;
-    height: 20px;
-    flex-shrink: 0;
-  }
-  .toggle input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-    position: absolute;
-  }
-  .toggle .slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: var(--label-badge-blue, #2196f3);
-    border-radius: 20px;
-    transition: background 0.2s;
-  }
-  .toggle input:checked + .slider {
-    background: var(--label-badge-green, #4caf50);
-  }
-  .toggle .slider::before {
-    content: "";
-    position: absolute;
-    width: 16px;
-    height: 16px;
-    left: 2px;
-    bottom: 2px;
-    background: white;
-    border-radius: 50%;
-    transition: transform 0.2s;
-  }
-  .toggle input:checked + .slider::before {
-    transform: translateX(16px);
-  }
-  .toggle-label {
-    font-size: 12px;
-    font-weight: 500;
-    text-transform: capitalize;
-    min-width: 52px;
+    gap: 4px;
   }
   .batch-interval-input {
     width: 64px;
@@ -264,11 +221,6 @@ const STYLES = `
     outline: none;
   }
   .batch-interval-suffix {
-    font-size: 12px;
-    color: var(--secondary-text-color);
-  }
-  .tags {
-    font-family: var(--code-font-family, monospace);
     font-size: 12px;
     color: var(--secondary-text-color);
   }
@@ -537,18 +489,11 @@ class VictoriaMetricsPanel extends HTMLElement {
         '<svg viewBox="0 0 24 24"><path d="M17,7H22V17H17V19A1,1 0 0,0 18,20H20V22H17.5C16.95,22 16,21.55 16,21C16,21.55 15.05,22 14.5,22H12V20H14A1,1 0 0,0 15,19V5A1,1 0 0,0 14,4H12V2H14.5C15.05,2 16,2.45 16,3C16,2.45 16.95,2 17.5,2H20V4H18A1,1 0 0,0 17,5V7M19,9H17V15H19V9M3,7H13V9H5V19H13V17H3V7M5,11H13V13H5V11Z"/></svg>' +
         "View Config" +
       "</button>" +
-      '<button class="settings-btn">' +
-        '<svg viewBox="0 0 24 24"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.04 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.04 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>' +
-        "Settings" +
-      "</button>" +
       "</div>";
     this.shadowRoot.appendChild(header);
 
     header.querySelector(".view-config-btn").addEventListener("click", () => {
       this._showConfigOverlay();
-    });
-    header.querySelector(".settings-btn:not(.view-config-btn)").addEventListener("click", () => {
-      this._navigateToSettings();
     });
 
     // Config overlay
@@ -645,30 +590,18 @@ class VictoriaMetricsPanel extends HTMLElement {
     for (const item of this._config.entities) {
       const entityId = item.entity_id;
       const metricName = item.metric_name;
-      const realtime = item.realtime || false;
       const batchInterval = item.batch_interval || this._config.batch_interval || 300;
       const sourceState = states[entityId];
       const friendlyName = sourceState
         ? sourceState.attributes.friendly_name || entityId
         : entityId;
 
-      // Check the sensor entity for custom tags
-      const sensorId = "sensor.vm_export_" + entityId.replace(".", "_");
-      const sensorState = states[sensorId];
-      const customTags = sensorState
-        ? sensorState.attributes.custom_tags || {}
-        : {};
-
       rows.push({
         sourceEntity: entityId,
         friendlyName: friendlyName,
         metricName: metricName,
         metricNameOverride: item.metric_name_override || "",
-        realtime: realtime,
         batchInterval: batchInterval,
-        customTags: Object.entries(customTags)
-          .map(function (pair) { return pair[0] + "=" + pair[1]; })
-          .join(", "),
       });
     }
 
@@ -707,28 +640,14 @@ class VictoriaMetricsPanel extends HTMLElement {
     for (const r of rows) {
       const objId = r.sourceEntity.split(".", 2).pop();
       const autoMetricName = metricPrefix ? metricPrefix + "_" + objId : objId;
-      const checkedAttr = r.realtime ? " checked" : "";
-      const modeLabel = r.realtime ? "realtime" : "batch";
-
-      let modeCell =
-        '<div class="toggle-wrapper">' +
-          '<label class="toggle">' +
-            '<input type="checkbox"' + checkedAttr +
-              ' data-entity="' + escapeHtml(r.sourceEntity) + '"' +
-              ' class="realtime-toggle">' +
-            '<span class="slider"></span>' +
-          '</label>' +
-          '<span class="toggle-label">' + modeLabel + '</span>';
-
-      if (!r.realtime) {
-        modeCell +=
+      const intervalCell =
+        '<div class="interval-wrapper">' +
           '<input type="number" class="batch-interval-input"' +
             ' value="' + r.batchInterval + '"' +
             ' min="10" max="3600" step="10"' +
             ' data-entity="' + escapeHtml(r.sourceEntity) + '">' +
-          '<span class="batch-interval-suffix">s</span>';
-      }
-      modeCell += '</div>';
+          '<span class="batch-interval-suffix">s</span>' +
+        '</div>';
 
       const displayName = this._formatDisplayName(r.sourceEntity);
       tableRows +=
@@ -753,8 +672,7 @@ class VictoriaMetricsPanel extends HTMLElement {
             '</button>' +
           '</div>' +
         "</td>" +
-        "<td>" + modeCell + "</td>" +
-        '<td class="tags">' + (r.customTags ? escapeHtml(r.customTags) : "\u2014") + "</td>" +
+        "<td>" + intervalCell + "</td>" +
         "<td>" +
           '<button class="remove-btn" data-entity="' + escapeHtml(r.sourceEntity) + '">' +
             "Remove" +
@@ -769,8 +687,7 @@ class VictoriaMetricsPanel extends HTMLElement {
           "<th>Entity</th>" +
           "<th>Friendly Name</th>" +
           "<th>Metric Name</th>" +
-          "<th>Mode</th>" +
-          "<th>Tags</th>" +
+          "<th>Min Interval</th>" +
           "<th></th>" +
         "</tr></thead>" +
         "<tbody>" + tableRows + "</tbody>" +
@@ -784,14 +701,6 @@ class VictoriaMetricsPanel extends HTMLElement {
       btn.addEventListener("click", function () {
         const entityId = btn.getAttribute("data-entity");
         self._removeEntity(entityId);
-      });
-    });
-
-    // Realtime toggle handlers
-    this._cardEl.querySelectorAll(".realtime-toggle").forEach(function (toggle) {
-      toggle.addEventListener("change", function () {
-        const entityId = toggle.getAttribute("data-entity");
-        self._updateEntitySetting(entityId, { realtime: toggle.checked });
       });
     });
 
@@ -840,18 +749,11 @@ class VictoriaMetricsPanel extends HTMLElement {
     this.dispatchEvent(event);
   }
 
-  _navigateToSettings() {
-    window.history.pushState(null, "", "/config/integrations/integration/victoria_metrics");
-    window.dispatchEvent(new CustomEvent("location-changed"));
-  }
-
   _showConfigOverlay() {
     if (!this._config) return;
 
     const c = this._config;
     const entityCount = c.entities ? c.entities.length : 0;
-    const realtimeCount = c.entities ? c.entities.filter(function (e) { return e.realtime; }).length : 0;
-    const batchCount = entityCount - realtimeCount;
 
     let entitiesHtml = "";
     if (c.entities && c.entities.length > 0) {
@@ -862,15 +764,13 @@ class VictoriaMetricsPanel extends HTMLElement {
         "<thead><tr>" +
           '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--divider-color);">Entity</th>' +
           '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--divider-color);">Metric</th>' +
-          '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--divider-color);">Mode</th>' +
-          '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--divider-color);">Interval</th>' +
+          '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--divider-color);">Min Interval</th>' +
         "</tr></thead><tbody>";
       for (const e of sorted) {
         entitiesHtml +=
           "<tr>" +
           '<td style="padding:4px 8px;font-family:monospace;font-size:12px;">' + escapeHtml(e.entity_id) + "</td>" +
           '<td style="padding:4px 8px;font-family:monospace;font-size:12px;">' + escapeHtml(e.metric_name) + "</td>" +
-          '<td style="padding:4px 8px;">' + (e.realtime ? "realtime" : "batch") + "</td>" +
           '<td style="padding:4px 8px;text-align:right;">' + e.batch_interval + "s</td>" +
           "</tr>";
       }
@@ -891,7 +791,7 @@ class VictoriaMetricsPanel extends HTMLElement {
           '<div class="config-value">' + c.batch_interval + " seconds</div>" +
         "</div>" +
         '<div class="config-section">' +
-          '<div class="config-label">Entities (' + entityCount + " total \u2014 " + realtimeCount + " realtime, " + batchCount + " batch)</div>" +
+          '<div class="config-label">Entities (' + entityCount + " total)</div>" +
           '<div class="config-value" style="padding:4px;overflow-x:auto;">' + entitiesHtml + "</div>" +
         "</div>" +
         '<button class="close-btn">Close</button>' +
@@ -910,7 +810,6 @@ class VictoriaMetricsPanel extends HTMLElement {
         type: "victoria_metrics/update_entity_settings",
         entity_id: entityId,
       };
-      if ("realtime" in settings) msg.realtime = settings.realtime;
       if ("batch_interval" in settings) msg.batch_interval = settings.batch_interval;
       if ("metric_name" in settings) msg.metric_name = settings.metric_name;
 
@@ -1092,7 +991,7 @@ class VictoriaMetricsPanel extends HTMLElement {
       // Skip entities already exported
       if (this._configEntities.indexOf(entityId) >= 0) continue;
       // Skip VM integration's own entities
-      if (entityId.startsWith("sensor.vm_export_") || entityId.startsWith("switch.vm_realtime_")) continue;
+      if (entityId.startsWith("sensor.vm_export_")) continue;
 
       const state = states[entityId];
       const friendlyName = state.attributes.friendly_name || "";
