@@ -983,7 +983,9 @@ class VictoriaMetricsPanel extends HTMLElement {
 
     const self = this;
     this._dropdown.querySelectorAll(".dropdown-item").forEach(function (item) {
-      item.addEventListener("click", function () {
+      item.addEventListener("click", function (e) {
+        e.stopPropagation();
+        e.preventDefault();
         const entityId = item.getAttribute("data-entity");
         self._addEntity(entityId);
       });
