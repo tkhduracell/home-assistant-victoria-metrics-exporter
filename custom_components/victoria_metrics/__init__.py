@@ -13,16 +13,11 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
     CALLBACK_TYPE,
-    Event,
-    EventStateChangedData,
     HomeAssistant,
     State,
     callback,
 )
-from homeassistant.helpers.event import (
-    async_track_state_change_event,
-    async_track_time_interval,
-)
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .attributes import extract_attribute_lines
@@ -117,7 +112,6 @@ def _build_entity_configs_from_options(
         entity_configs[entity_id] = EntityConfig(
             entity_id=entity_id,
             metric_name=metric_name,
-            realtime=settings.get("realtime", False),
             batch_interval=int(settings.get("batch_interval", global_batch_interval)),
         )
 
@@ -127,18 +121,16 @@ def _build_entity_configs_from_options(
 class EntityConfig:
     """Parsed entity configuration."""
 
-    __slots__ = ("batch_interval", "entity_id", "metric_name", "realtime")
+    __slots__ = ("batch_interval", "entity_id", "metric_name")
 
     def __init__(
         self,
         entity_id: str,
         metric_name: str,
-        realtime: bool,
         batch_interval: int = DEFAULT_BATCH_INTERVAL,
     ) -> None:
         self.entity_id = entity_id
         self.metric_name = metric_name
-        self.realtime = realtime
         self.batch_interval = batch_interval
 
 
@@ -168,19 +160,8 @@ class ExportManager:
         self.writer = writer
         self.entity_configs = entity_configs
         self.batch_interval = batch_interval
-        self._entity_unsubs: dict[str, CALLBACK_TYPE] = {}
         self._batch_timers: dict[int, CALLBACK_TYPE] = {}
-        self._mode_change_listeners: list[Callable[[str, bool], None]] = []
         self._audit_log: deque[AuditLogEntry] = deque(maxlen=100)
-
-    def on_mode_change(self, listener: Callable[[str, bool], None]) -> None:
-        """Register a callback for when an entity's mode changes."""
-        self._mode_change_listeners.append(listener)
-
-    def _notify_mode_change(self, entity_id: str, realtime: bool) -> None:
-        """Notify listeners of a mode change."""
-        for listener in self._mode_change_listeners:
-            listener(entity_id, realtime)
 
     def _record_audit_entry(
         self,
@@ -236,45 +217,16 @@ class ExportManager:
 
         return lines
 
-    def _register_realtime(self, entity_id: str) -> None:
-        """Register a real-time state change listener for one entity."""
-
-        @callback
-        def _handle_realtime(event: Event[EventStateChangedData]) -> None:
-            new_state: State | None = event.data.get("new_state")
-            if new_state is None:
-                return
-            eid = event.data.get("entity_id", "")
-            lines = self._format_state_lines(eid, new_state)
-            if lines:
-                value = _process_state(new_state.state)
-                self._record_audit_entry(eid, value, "realtime", len(lines))
-                self.hass.async_create_task(self.writer.write_batch(lines))
-
-        unsub = async_track_state_change_event(self.hass, [entity_id], _handle_realtime)
-        self._entity_unsubs[entity_id] = unsub
-
     def start(self) -> None:
-        """Register all listeners based on current entity configs."""
-        for entity_id, ec in self.entity_configs.items():
-            if ec.realtime:
-                self._register_realtime(entity_id)
-
+        """Register batch timers for all entity configs."""
         self._sync_batch_timers()
 
-        realtime_ids = [eid for eid, ec in self.entity_configs.items() if ec.realtime]
-        batch_ids = [eid for eid, ec in self.entity_configs.items() if not ec.realtime]
-        if realtime_ids:
-            _LOGGER.info(
-                "Tracking %d entities in real-time mode: %s",
-                len(realtime_ids),
-                ", ".join(realtime_ids),
-            )
-        if batch_ids:
+        entity_ids = list(self.entity_configs)
+        if entity_ids:
             _LOGGER.info(
                 "Tracking %d entities in batch mode: %s",
-                len(batch_ids),
-                ", ".join(batch_ids),
+                len(entity_ids),
+                ", ".join(entity_ids),
             )
 
     def _get_needed_batch_intervals(self) -> set[int]:
@@ -325,33 +277,6 @@ class ExportManager:
         return _flush
 
     @callback
-    def set_realtime(self, entity_id: str, realtime: bool) -> None:
-        """Switch an entity between realtime and batch mode."""
-        ec = self.entity_configs.get(entity_id)
-        if ec is None:
-            return
-
-        if ec.realtime == realtime:
-            return
-
-        # Unsubscribe current listener (only realtime entities have listeners)
-        if entity_id in self._entity_unsubs:
-            self._entity_unsubs[entity_id]()
-            del self._entity_unsubs[entity_id]
-
-        # Update config and register new listener if switching to realtime
-        ec.realtime = realtime
-        if realtime:
-            self._register_realtime(entity_id)
-        # Batch: no listener needed, periodic timer handles sampling
-
-        self._sync_batch_timers()
-
-        mode_str = "real-time" if realtime else "batch"
-        _LOGGER.info("Switched %s to %s mode", entity_id, mode_str)
-        self._notify_mode_change(entity_id, realtime)
-
-    @callback
     def set_batch_interval(self, entity_id: str, interval: int) -> None:
         """Change the batch flush interval for an entity."""
         ec = self.entity_configs.get(entity_id)
@@ -376,10 +301,6 @@ class ExportManager:
 
     async def shutdown(self) -> None:
         """Clean up all listeners and send final sample."""
-        for unsub in self._entity_unsubs.values():
-            unsub()
-        self._entity_unsubs.clear()
-
         for unsub in self._batch_timers.values():
             unsub()
         self._batch_timers.clear()
