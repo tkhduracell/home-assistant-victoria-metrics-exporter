@@ -195,9 +195,7 @@ async def handle_update_entity_settings(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "victoria_metrics/get_audit_log",
-        vol.Optional("limit", default=50): vol.All(
-            int, vol.Range(min=1, max=200)
-        ),
+        vol.Optional("limit", default=50): vol.All(int, vol.Range(min=1, max=200)),
     }
 )
 @callback

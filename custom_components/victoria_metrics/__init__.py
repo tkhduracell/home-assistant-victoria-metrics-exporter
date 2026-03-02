@@ -314,14 +314,10 @@ class ExportManager:
                 state = self.hass.states.get(eid)
                 if state is None:
                     continue
-                entity_lines = self._format_state_lines(
-                    eid, state, timestamp_ns=now_ns
-                )
+                entity_lines = self._format_state_lines(eid, state, timestamp_ns=now_ns)
                 if entity_lines:
                     value = _process_state(state.state)
-                    self._record_audit_entry(
-                        eid, value, "batch", len(entity_lines)
-                    )
+                    self._record_audit_entry(eid, value, "batch", len(entity_lines))
                 lines.extend(entity_lines)
             if lines:
                 await self.writer.write_batch(lines)
