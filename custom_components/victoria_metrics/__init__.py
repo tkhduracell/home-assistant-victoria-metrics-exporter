@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass
 from datetime import timedelta
 import logging
 import time
@@ -140,6 +142,18 @@ class EntityConfig:
         self.batch_interval = batch_interval
 
 
+@dataclass(slots=True)
+class AuditLogEntry:
+    """A single audit log entry for an export event."""
+
+    timestamp: float
+    entity_id: str
+    metric_name: str
+    value: float | str | None
+    mode: str
+    lines_count: int
+
+
 class ExportManager:
     """Manages per-entity export listeners and periodic state sampling."""
 
@@ -157,6 +171,7 @@ class ExportManager:
         self._entity_unsubs: dict[str, CALLBACK_TYPE] = {}
         self._batch_timers: dict[int, CALLBACK_TYPE] = {}
         self._mode_change_listeners: list[Callable[[str, bool], None]] = []
+        self._audit_log: deque[AuditLogEntry] = deque(maxlen=100)
 
     def on_mode_change(self, listener: Callable[[str, bool], None]) -> None:
         """Register a callback for when an entity's mode changes."""
@@ -166,6 +181,34 @@ class ExportManager:
         """Notify listeners of a mode change."""
         for listener in self._mode_change_listeners:
             listener(entity_id, realtime)
+
+    def _record_audit_entry(
+        self,
+        entity_id: str,
+        value: float | str | None,
+        mode: str,
+        lines_count: int,
+    ) -> None:
+        """Record an export event in the audit log."""
+        ec = self.entity_configs.get(entity_id)
+        if ec is None:
+            return
+        self._audit_log.append(
+            AuditLogEntry(
+                timestamp=time.time(),
+                entity_id=entity_id,
+                metric_name=ec.metric_name,
+                value=value,
+                mode=mode,
+                lines_count=lines_count,
+            )
+        )
+
+    def get_audit_log(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent audit log entries as dicts, newest first."""
+        entries = list(self._audit_log)
+        entries.reverse()
+        return [asdict(e) for e in entries[:limit]]
 
     def _format_state_lines(
         self, entity_id: str, state: State, *, timestamp_ns: int | None = None
@@ -204,6 +247,8 @@ class ExportManager:
             eid = event.data.get("entity_id", "")
             lines = self._format_state_lines(eid, new_state)
             if lines:
+                value = _process_state(new_state.state)
+                self._record_audit_entry(eid, value, "realtime", len(lines))
                 self.hass.async_create_task(self.writer.write_batch(lines))
 
         unsub = async_track_state_change_event(self.hass, [entity_id], _handle_realtime)
@@ -269,7 +314,15 @@ class ExportManager:
                 state = self.hass.states.get(eid)
                 if state is None:
                     continue
-                lines.extend(self._format_state_lines(eid, state, timestamp_ns=now_ns))
+                entity_lines = self._format_state_lines(
+                    eid, state, timestamp_ns=now_ns
+                )
+                if entity_lines:
+                    value = _process_state(state.state)
+                    self._record_audit_entry(
+                        eid, value, "batch", len(entity_lines)
+                    )
+                lines.extend(entity_lines)
             if lines:
                 await self.writer.write_batch(lines)
 

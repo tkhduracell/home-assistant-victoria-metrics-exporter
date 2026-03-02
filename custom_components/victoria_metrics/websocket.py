@@ -40,6 +40,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, handle_get_config)
     websocket_api.async_register_command(hass, handle_save_entities)
     websocket_api.async_register_command(hass, handle_update_entity_settings)
+    websocket_api.async_register_command(hass, handle_get_audit_log)
 
 
 @websocket_api.websocket_command(
@@ -189,3 +190,34 @@ async def handle_update_entity_settings(
             manager.set_metric_name(entity_id, new_name)
 
     connection.send_result(msg["id"], {"success": True})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/get_audit_log",
+        vol.Optional("limit", default=50): vol.All(
+            int, vol.Range(min=1, max=200)
+        ),
+    }
+)
+@callback
+def handle_get_audit_log(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return recent export audit log entries."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_result(msg["id"], {"entries": []})
+        return
+
+    domain_data = hass.data.get(DOMAIN, {})
+    entry_data = domain_data.get(entry.entry_id)
+    if not entry_data:
+        connection.send_result(msg["id"], {"entries": []})
+        return
+
+    manager: ExportManager = entry_data["manager"]
+    entries = manager.get_audit_log(limit=msg.get("limit", 50))
+    connection.send_result(msg["id"], {"entries": entries})

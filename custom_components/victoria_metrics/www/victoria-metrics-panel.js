@@ -393,6 +393,74 @@ const STYLES = `
     background: var(--table-row-alternative-background-color,
                     rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04));
   }
+  .audit-section {
+    margin-top: 24px;
+  }
+  .audit-header {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--primary-text-color);
+    margin: 0 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .audit-count {
+    font-size: 12px;
+    color: var(--secondary-text-color);
+    font-weight: 400;
+  }
+  .audit-card {
+    background: var(--ha-card-background, var(--card-background-color));
+    border-radius: var(--ha-card-border-radius, 12px);
+    box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0, 0, 0, 0.1));
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 0;
+  }
+  .audit-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--divider-color);
+    font-size: 13px;
+  }
+  .audit-entry:last-child {
+    border-bottom: none;
+  }
+  .audit-time {
+    font-size: 11px;
+    color: var(--secondary-text-color);
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 64px;
+  }
+  .audit-metric {
+    font-family: var(--code-font-family, monospace);
+    color: var(--primary-color);
+    flex-shrink: 0;
+  }
+  .audit-arrow {
+    color: var(--secondary-text-color);
+    flex-shrink: 0;
+  }
+  .audit-value {
+    font-family: var(--code-font-family, monospace);
+    color: var(--primary-text-color);
+  }
+  .audit-mode {
+    font-size: 11px;
+    color: var(--secondary-text-color);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .audit-empty {
+    text-align: center;
+    padding: 24px 16px;
+    color: var(--secondary-text-color);
+    font-size: 13px;
+  }
 `;
 
 function escapeHtml(text) {
@@ -416,6 +484,8 @@ class VictoriaMetricsPanel extends HTMLElement {
     this._saving = false;
     this._searchQuery = "";
     this._configLoadPending = false;
+    this._auditEntries = [];
+    this._auditTimer = null;
   }
 
   set hass(hass) {
@@ -442,6 +512,15 @@ class VictoriaMetricsPanel extends HTMLElement {
       this._initialized = true;
     }
     this._updateIfChanged();
+    this._loadAuditLog();
+    this._auditTimer = setInterval(() => { this._loadAuditLog(); }, 10000);
+  }
+
+  disconnectedCallback() {
+    if (this._auditTimer) {
+      clearInterval(this._auditTimer);
+      this._auditTimer = null;
+    }
   }
 
   _initLayout() {
@@ -517,6 +596,16 @@ class VictoriaMetricsPanel extends HTMLElement {
     this._cardEl = document.createElement("div");
     this._cardEl.className = "card";
     this.shadowRoot.appendChild(this._cardEl);
+
+    // Audit log section
+    this._auditSection = document.createElement("div");
+    this._auditSection.className = "audit-section";
+    this._auditSection.innerHTML =
+      '<div class="audit-header">Export Log <span class="audit-count"></span></div>';
+    this._auditCard = document.createElement("div");
+    this._auditCard.className = "audit-card";
+    this._auditSection.appendChild(this._auditCard);
+    this.shadowRoot.appendChild(this._auditSection);
   }
 
   _scheduleConfigLoad() {
@@ -935,6 +1024,58 @@ class VictoriaMetricsPanel extends HTMLElement {
     if (entityPart) parts.push(entityPart);
 
     return parts.join(" / ");
+  }
+
+  async _loadAuditLog() {
+    if (!this._hass) return;
+    try {
+      var result = await this._hass.connection.sendMessagePromise({
+        type: "victoria_metrics/get_audit_log",
+        limit: 50,
+      });
+      this._auditEntries = result.entries || [];
+      this._renderAuditLog();
+    } catch (_err) {
+      // Audit log is non-critical
+    }
+  }
+
+  _renderAuditLog() {
+    if (!this._auditCard) return;
+    var entries = this._auditEntries;
+
+    var countEl = this._auditSection.querySelector(".audit-count");
+    if (countEl) {
+      countEl.textContent = entries.length > 0
+        ? "(" + entries.length + " recent)"
+        : "";
+    }
+
+    if (entries.length === 0) {
+      this._auditCard.innerHTML =
+        '<div class="audit-empty">No export events recorded yet.</div>';
+      return;
+    }
+
+    var html = "";
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var d = new Date(e.timestamp * 1000);
+      var timeStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      var valueStr = e.value === null ? "skipped" : String(e.value);
+      var linesInfo = e.lines_count > 1 ? " (" + e.lines_count + " lines)" : "";
+
+      html +=
+        '<div class="audit-entry">' +
+          '<span class="audit-time">' + escapeHtml(timeStr) + '</span>' +
+          '<span class="audit-metric">' + escapeHtml(e.metric_name) + '</span>' +
+          '<span class="audit-arrow">\u2192</span>' +
+          '<span class="audit-value">' + escapeHtml(valueStr) + escapeHtml(linesInfo) + '</span>' +
+          '<span class="audit-mode">' + escapeHtml(e.mode) + '</span>' +
+        '</div>';
+    }
+
+    this._auditCard.innerHTML = html;
   }
 
   _updateDropdown() {
