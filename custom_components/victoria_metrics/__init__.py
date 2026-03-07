@@ -43,7 +43,7 @@ from .const import (
     STATE_MAP,
     build_metric_name,
 )
-from .panel import async_register_panel, async_unregister_panel
+from .panel import async_register_panel
 from .websocket import async_register_websocket_commands
 from .writer import VictoriaMetricsWriter
 
@@ -399,8 +399,10 @@ class ExportManager:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Victoria Metrics Exporter."""
-    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {})
     async_register_websocket_commands(hass)
+    await async_register_panel(hass)
+    domain_data["panel_registered"] = True
     return True
 
 
@@ -448,11 +450,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "writer": writer,
     }
 
-    # Register sidebar panel once
-    if not domain_data.get("panel_registered"):
-        await async_register_panel(hass)
-        domain_data["panel_registered"] = True
-
     # Forward platform setup
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -469,11 +466,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         manager = entry_data.get("manager")
         if manager:
             await manager.shutdown()
-
-    # Remove sidebar panel when the last config entry is unloaded
-    remaining = [k for k in domain_data if k != "panel_registered"]
-    if not remaining and domain_data.get("panel_registered"):
-        async_unregister_panel(hass)
-        domain_data["panel_registered"] = False
 
     return unload_ok
