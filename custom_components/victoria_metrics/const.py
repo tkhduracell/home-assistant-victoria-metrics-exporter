@@ -4,7 +4,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "victoria_metrics"
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH]
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 CONF_HOST = "host"
 CONF_PORT = "port"

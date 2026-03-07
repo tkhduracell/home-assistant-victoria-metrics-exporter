@@ -78,7 +78,6 @@ def handle_get_config(
                     prefix, entity_id, metric_name_override or None
                 ),
                 "metric_name_override": metric_name_override,
-                "realtime": settings.get("realtime", False),
                 "batch_interval": settings.get("batch_interval", batch_interval),
             }
         )
@@ -128,7 +127,6 @@ async def handle_save_entities(
     {
         vol.Required("type"): "victoria_metrics/update_entity_settings",
         vol.Required("entity_id"): str,
-        vol.Optional("realtime"): bool,
         vol.Optional("batch_interval"): vol.All(int, vol.Range(min=10, max=3600)),
         vol.Optional("metric_name"): vol.Any(str, None),
     }
@@ -158,8 +156,6 @@ async def handle_update_entity_settings(
     )
     current = dict(entity_settings.get(entity_id, {}))
 
-    if "realtime" in msg:
-        current["realtime"] = msg["realtime"]
     if "batch_interval" in msg:
         current["batch_interval"] = msg["batch_interval"]
     if "metric_name" in msg:
@@ -179,8 +175,6 @@ async def handle_update_entity_settings(
     entry_data = domain_data.get(entry.entry_id)
     if entry_data:
         manager: ExportManager = entry_data["manager"]
-        if "realtime" in msg:
-            manager.set_realtime(entity_id, msg["realtime"])
         if "batch_interval" in msg:
             manager.set_batch_interval(entity_id, msg["batch_interval"])
         if "metric_name" in msg:

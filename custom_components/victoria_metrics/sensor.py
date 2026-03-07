@@ -61,6 +61,5 @@ class VictoriaMetricsExportSensor(SensorEntity):
         return {
             "source_entity": self._ec.entity_id,
             "metric_name": self._ec.metric_name,
-            "mode": "realtime" if self._ec.realtime else "batch",
             "batch_interval": self._ec.batch_interval,
         }
