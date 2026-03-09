@@ -103,8 +103,20 @@ const STYLES = `
     background: var(--table-row-alternative-background-color,
                     rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04));
   }
+  .dropdown-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
   .dropdown-item .entity-name {
     color: var(--primary-text-color);
+  }
+  .dropdown-item .entity-value {
+    font-size: 12px;
+    color: var(--secondary-text-color);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .dropdown-item .entity-detail {
     font-size: 12px;
@@ -998,7 +1010,12 @@ class VictoriaMetricsPanel extends HTMLElement {
       const searchText = entityId + " " + friendlyName.toLowerCase();
 
       if (searchText.indexOf(query) >= 0) {
-        matches.push({ entityId: entityId, friendlyName: friendlyName });
+        matches.push({
+          entityId: entityId,
+          friendlyName: friendlyName,
+          stateValue: state.state,
+          unit: state.attributes.unit_of_measurement || "",
+        });
       }
       if (matches.length >= 10) break;
     }
@@ -1011,9 +1028,13 @@ class VictoriaMetricsPanel extends HTMLElement {
     let html = "";
     for (const m of matches) {
       const displayName = this._formatDisplayName(m.entityId);
+      const valueText = m.stateValue + (m.unit ? " " + m.unit : "");
       html +=
         '<div class="dropdown-item" data-entity="' + escapeHtml(m.entityId) + '">' +
-          '<span class="entity-name">' + escapeHtml(displayName) + "</span>" +
+          '<div class="dropdown-item-header">' +
+            '<span class="entity-name">' + escapeHtml(displayName) + "</span>" +
+            '<span class="entity-value">' + escapeHtml(valueText) + "</span>" +
+          "</div>" +
           '<span class="entity-detail">' + escapeHtml(m.entityId) + "</span>" +
         "</div>";
     }
