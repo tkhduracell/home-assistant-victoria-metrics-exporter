@@ -78,7 +78,7 @@ const STYLES = `
     border: 1px solid var(--divider-color);
     border-radius: 8px;
     margin-top: 4px;
-    max-height: 240px;
+    max-height: 480px;
     overflow-y: auto;
     z-index: 10;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -535,7 +535,7 @@ class VictoriaMetricsPanel extends HTMLElement {
       this._updateDropdown();
     });
     this._searchInput.addEventListener("focus", () => {
-      if (this._searchQuery.length >= 2) {
+      if (this._searchQuery.length >= 3) {
         this._updateDropdown();
       }
     });
@@ -990,7 +990,7 @@ class VictoriaMetricsPanel extends HTMLElement {
   }
 
   _updateDropdown() {
-    if (!this._hass || this._searchQuery.length < 2) {
+    if (!this._hass || this._searchQuery.length < 3) {
       this._closeDropdown();
       return;
     }
@@ -1017,7 +1017,7 @@ class VictoriaMetricsPanel extends HTMLElement {
           unit: state.attributes.unit_of_measurement || "",
         });
       }
-      if (matches.length >= 10) break;
+      if (matches.length >= 100) break;
     }
 
     if (matches.length === 0) {
