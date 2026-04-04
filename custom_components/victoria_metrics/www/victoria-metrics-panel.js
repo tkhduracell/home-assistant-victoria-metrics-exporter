@@ -15,9 +15,33 @@ const STYLES = `
     margin-bottom: 24px;
     gap: 8px;
   }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
   .header > div {
     display: flex;
     gap: 8px;
+  }
+  .menu-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    color: var(--primary-text-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .menu-btn:hover {
+    background: var(--secondary-background-color, rgba(0,0,0,0.05));
+  }
+  .menu-btn svg {
+    width: 24px;
+    height: 24px;
+    fill: currentColor;
   }
   h1 {
     font-size: 24px;
@@ -495,7 +519,12 @@ class VictoriaMetricsPanel extends HTMLElement {
     const header = document.createElement("div");
     header.className = "header";
     header.innerHTML =
-      "<h1>Victoria Metrics Exports</h1>" +
+      '<div class="header-left">' +
+        '<button class="menu-btn" title="Toggle sidebar">' +
+          '<svg viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/></svg>' +
+        '</button>' +
+        "<h1>Victoria Metrics Exports</h1>" +
+      "</div>" +
       "<div>" +
       '<button class="settings-btn view-config-btn">' +
         '<svg viewBox="0 0 24 24"><path d="M17,7H22V17H17V19A1,1 0 0,0 18,20H20V22H17.5C16.95,22 16,21.55 16,21C16,21.55 15.05,22 14.5,22H12V20H14A1,1 0 0,0 15,19V5A1,1 0 0,0 14,4H12V2H14.5C15.05,2 16,2.45 16,3C16,2.45 16.95,2 17.5,2H20V4H18A1,1 0 0,0 17,5V7M19,9H17V15H19V9M3,7H13V9H5V19H13V17H3V7M5,11H13V13H5V11Z"/></svg>' +
@@ -503,6 +532,13 @@ class VictoriaMetricsPanel extends HTMLElement {
       "</button>" +
       "</div>";
     this.shadowRoot.appendChild(header);
+
+    header.querySelector(".menu-btn").addEventListener("click", () => {
+      this.dispatchEvent(new CustomEvent("hass-toggle-menu", {
+        bubbles: true,
+        composed: true,
+      }));
+    });
 
     header.querySelector(".view-config-btn").addEventListener("click", () => {
       this._showConfigOverlay();
