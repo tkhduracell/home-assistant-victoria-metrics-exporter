@@ -78,7 +78,7 @@ const STYLES = `
     border: 1px solid var(--divider-color);
     border-radius: 8px;
     margin-top: 4px;
-    max-height: 240px;
+    max-height: 480px;
     overflow-y: auto;
     z-index: 10;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -998,6 +998,7 @@ class VictoriaMetricsPanel extends HTMLElement {
     const query = this._searchQuery.toLowerCase();
     const states = this._hass.states;
     const matches = [];
+    const maxResults = this._searchQuery.length >= 3 ? 100 : 10;
 
     for (const entityId of Object.keys(states)) {
       // Skip entities already exported
@@ -1017,7 +1018,7 @@ class VictoriaMetricsPanel extends HTMLElement {
           unit: state.attributes.unit_of_measurement || "",
         });
       }
-      if (matches.length >= 10) break;
+      if (matches.length >= maxResults) break;
     }
 
     if (matches.length === 0) {
