@@ -43,6 +43,19 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     _LOGGER.debug("Registered Victoria Metrics sidebar panel")
 
 
+def async_register_more_info_js(hass: HomeAssistant) -> None:
+    """Register the more-info button JS as a globally loaded extra module."""
+    from homeassistant.components.frontend import add_extra_js_url  # noqa: PLC0415
+
+    js_path = _PANEL_DIR / "victoria-metrics-more-info.js"
+    file_hash = hashlib.sha256(js_path.read_bytes()).hexdigest()[:8]
+
+    # The static path PANEL_URL -> www/ is already registered by async_register_panel,
+    # so the JS file is accessible at /victoria_metrics_panel/victoria-metrics-more-info.js
+    add_extra_js_url(hass, f"{PANEL_URL}/victoria-metrics-more-info.js?h={file_hash}")
+    _LOGGER.debug("Registered Victoria Metrics more-info JS module")
+
+
 def async_unregister_panel(hass: HomeAssistant) -> None:
     """Remove the Victoria Metrics sidebar panel."""
     async_remove_panel(hass, DOMAIN)

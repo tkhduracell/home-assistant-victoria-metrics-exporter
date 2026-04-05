@@ -41,6 +41,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, handle_save_entities)
     websocket_api.async_register_command(hass, handle_update_entity_settings)
     websocket_api.async_register_command(hass, handle_get_audit_log)
+    websocket_api.async_register_command(hass, handle_add_entity)
+    websocket_api.async_register_command(hass, handle_remove_entity)
 
 
 @websocket_api.websocket_command(
@@ -213,3 +215,80 @@ def handle_get_audit_log(
     manager: ExportManager = entry_data["manager"]
     entries = manager.get_audit_log(limit=msg.get("limit", 50))
     connection.send_result(msg["id"], {"entries": entries})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/add_entity",
+        vol.Required("entity_id"): str,
+    }
+)
+@websocket_api.async_response
+async def handle_add_entity(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Add a single entity to the export list and reload."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+
+    entity_id: str = msg["entity_id"]
+    entities: list[str] = list(entry.options.get(CONF_EXPORT_ENTITIES, []))
+
+    if entity_id in entities:
+        connection.send_result(msg["id"], {"success": True, "already_tracked": True})
+        return
+
+    entities.append(entity_id)
+    new_options = dict(entry.options)
+    new_options[CONF_EXPORT_ENTITIES] = entities
+
+    hass.config_entries.async_update_entry(entry, options=new_options)
+    await hass.config_entries.async_reload(entry.entry_id)
+
+    connection.send_result(msg["id"], {"success": True, "already_tracked": False})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/remove_entity",
+        vol.Required("entity_id"): str,
+    }
+)
+@websocket_api.async_response
+async def handle_remove_entity(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove a single entity from the export list and reload."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+
+    entity_id: str = msg["entity_id"]
+    entities: list[str] = list(entry.options.get(CONF_EXPORT_ENTITIES, []))
+
+    if entity_id not in entities:
+        connection.send_result(msg["id"], {"success": True, "was_tracked": False})
+        return
+
+    entities.remove(entity_id)
+    new_options = dict(entry.options)
+    new_options[CONF_EXPORT_ENTITIES] = entities
+
+    # Clean up per-entity settings for the removed entity
+    entity_settings: dict[str, dict[str, Any]] = dict(
+        new_options.get(CONF_ENTITY_SETTINGS, {})
+    )
+    entity_settings.pop(entity_id, None)
+    new_options[CONF_ENTITY_SETTINGS] = entity_settings
+
+    hass.config_entries.async_update_entry(entry, options=new_options)
+    await hass.config_entries.async_reload(entry.entry_id)
+
+    connection.send_result(msg["id"], {"success": True, "was_tracked": True})
