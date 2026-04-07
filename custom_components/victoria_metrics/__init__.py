@@ -38,7 +38,7 @@ from .const import (
     STATE_MAP,
     build_metric_name,
 )
-from .panel import async_register_panel
+from .panel import async_register_more_info_js, async_register_panel
 from .websocket import async_register_websocket_commands
 from .writer import VictoriaMetricsWriter
 
@@ -323,6 +323,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     domain_data = hass.data.setdefault(DOMAIN, {})
     async_register_websocket_commands(hass)
     await async_register_panel(hass)
+    async_register_more_info_js(hass)
     domain_data["panel_registered"] = True
     return True
 
