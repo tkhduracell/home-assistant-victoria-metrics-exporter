@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -19,6 +20,7 @@ from homeassistant.core import (
 )
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .attributes import extract_attribute_lines
 from .const import (
@@ -28,19 +30,24 @@ from .const import (
     CONF_HOST,
     CONF_METRIC_PREFIX,
     CONF_PORT,
+    CONF_SOURCES,
     CONF_SSL,
     CONF_TOKEN,
     CONF_VERIFY_SSL,
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_METRIC_PREFIX,
+    DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     PLATFORMS,
     STATE_MAP,
     build_metric_name,
 )
 from .panel import async_register_more_info_js, async_register_panel
+from .reader import VictoriaMetricsReader
 from .websocket import async_register_websocket_commands
 from .writer import VictoriaMetricsWriter
+
+SourceCoordinator = DataUpdateCoordinator[dict[str, Any] | None]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -356,26 +363,90 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data = hass.data.setdefault(DOMAIN, {})
     entity_configs, batch_interval = _build_entity_configs_from_options(entry.options)
 
-    if not entity_configs:
+    source_configs: list[dict[str, Any]] = list(entry.options.get(CONF_SOURCES, []))
+
+    if not entity_configs and not source_configs:
         _LOGGER.warning(
-            "No entity mappings configured for Victoria Metrics. "
+            "No entity mappings or source sensors configured for Victoria Metrics. "
             "Use Settings > Devices & Services > Victoria Metrics > Configure "
-            "to select entities for export.",
+            "to select entities for export, or add a Victoria Metrics source.",
         )
 
     manager = ExportManager(hass, writer, entity_configs, batch_interval)
     manager.start()
 
+    reader: VictoriaMetricsReader | None = None
+    source_coordinators: dict[str, SourceCoordinator] = {}
+    if source_configs:
+        reader = VictoriaMetricsReader(
+            host=entry.data[CONF_HOST],
+            port=entry.data[CONF_PORT],
+            ssl=entry.data.get(CONF_SSL, False),
+            verify_ssl=entry.data.get(CONF_VERIFY_SSL, True),
+            token=entry.data.get(CONF_TOKEN) or None,
+        )
+        for src in source_configs:
+            source_id = src.get("id")
+            if not source_id:
+                _LOGGER.warning(
+                    "Skipping Victoria Metrics source without 'id': %s", src
+                )
+                continue
+            coordinator = _build_source_coordinator(hass, reader, src)
+            source_coordinators[source_id] = coordinator
+        if source_coordinators:
+            # Refresh concurrently so setup latency is bounded by the slowest
+            # source rather than the sum of all sources.
+            await asyncio.gather(
+                *(
+                    c.async_config_entry_first_refresh()
+                    for c in source_coordinators.values()
+                )
+            )
+            _LOGGER.info(
+                "Configured %d Victoria Metrics source sensor(s)",
+                len(source_coordinators),
+            )
+
     # Store runtime data keyed by entry_id
     domain_data[entry.entry_id] = {
         "manager": manager,
         "writer": writer,
+        "reader": reader,
+        "source_configs": source_configs,
+        "source_coordinators": source_coordinators,
     }
 
     # Forward platform setup
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+def _build_source_coordinator(
+    hass: HomeAssistant,
+    reader: VictoriaMetricsReader,
+    source_config: dict[str, Any],
+) -> SourceCoordinator:
+    """Create a DataUpdateCoordinator for a single Victoria Metrics source."""
+    name = str(source_config.get("name") or source_config["id"])
+    query = str(source_config["query"])
+    scan_interval = int(source_config.get("scan_interval", DEFAULT_SCAN_INTERVAL))
+
+    async def _async_update() -> dict[str, Any] | None:
+        result = await reader.query_instant(query)
+        if result is None:
+            return None
+        value, labels, timestamp_s = result
+        return {"value": value, "labels": labels, "timestamp": timestamp_s}
+
+    return SourceCoordinator(
+        hass,
+        _LOGGER,
+        name=f"victoria_metrics source {name}",
+        update_method=_async_update,
+        update_interval=timedelta(seconds=scan_interval),
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -388,5 +459,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         manager = entry_data.get("manager")
         if manager:
             await manager.shutdown()
+        reader = entry_data.get("reader")
+        if reader is not None:
+            await reader.close()
 
     return unload_ok
