@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry
@@ -14,17 +15,42 @@ from .const import (
     CONF_BATCH_INTERVAL,
     CONF_ENTITY_SETTINGS,
     CONF_EXPORT_ENTITIES,
+    CONF_HOST,
     CONF_METRIC_PREFIX,
+    CONF_PORT,
+    CONF_SOURCES,
+    CONF_SSL,
+    CONF_TOKEN,
+    CONF_VERIFY_SSL,
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_METRIC_PREFIX,
+    DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     build_metric_name,
 )
+from .reader import VictoriaMetricsReader
 
 if TYPE_CHECKING:
     from . import ExportManager
 
 _LOGGER = logging.getLogger(__name__)
+
+SOURCE_OPTIONAL_FIELDS = (
+    "unit_of_measurement",
+    "device_class",
+    "state_class",
+    "icon",
+)
+
+SOURCE_SCHEMA_FIELDS: dict[Any, Any] = {
+    vol.Required("name"): str,
+    vol.Required("query"): str,
+    vol.Optional("scan_interval"): vol.All(int, vol.Range(min=5, max=86400)),
+    vol.Optional("unit_of_measurement"): vol.Any(str, None),
+    vol.Optional("device_class"): vol.Any(str, None),
+    vol.Optional("state_class"): vol.Any(str, None),
+    vol.Optional("icon"): vol.Any(str, None),
+}
 
 
 def _get_config_entry(hass: HomeAssistant) -> ConfigEntry | None:
@@ -43,6 +69,11 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, handle_get_audit_log)
     websocket_api.async_register_command(hass, handle_add_entity)
     websocket_api.async_register_command(hass, handle_remove_entity)
+    websocket_api.async_register_command(hass, handle_get_sources)
+    websocket_api.async_register_command(hass, handle_add_source)
+    websocket_api.async_register_command(hass, handle_update_source)
+    websocket_api.async_register_command(hass, handle_remove_source)
+    websocket_api.async_register_command(hass, handle_test_source)
 
 
 @websocket_api.websocket_command(
@@ -292,3 +323,212 @@ async def handle_remove_entity(
     await hass.config_entries.async_reload(entry.entry_id)
 
     connection.send_result(msg["id"], {"success": True, "was_tracked": True})
+
+
+# ---------------------------------------------------------------------------
+# Source sensors (read-from-Victoria-Metrics) CRUD
+# ---------------------------------------------------------------------------
+
+
+def _normalize_source_input(
+    msg: dict[str, Any], existing_id: str | None = None
+) -> dict[str, Any]:
+    """Build a normalized source dict from a websocket message."""
+    src: dict[str, Any] = {
+        "id": existing_id or uuid4().hex,
+        "name": msg["name"],
+        "query": msg["query"],
+        "scan_interval": int(msg.get("scan_interval", DEFAULT_SCAN_INTERVAL)),
+    }
+    for field in SOURCE_OPTIONAL_FIELDS:
+        value = msg.get(field)
+        if value:
+            src[field] = value
+    return src
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/get_sources",
+    }
+)
+@callback
+def handle_get_sources(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return the list of configured Victoria Metrics source sensors."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+
+    sources: list[dict[str, Any]] = list(entry.options.get(CONF_SOURCES, []))
+    connection.send_result(msg["id"], {"sources": sources})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/add_source",
+        **SOURCE_SCHEMA_FIELDS,
+    }
+)
+@websocket_api.async_response
+async def handle_add_source(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Add a new Victoria Metrics source sensor and reload."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+
+    sources: list[dict[str, Any]] = list(entry.options.get(CONF_SOURCES, []))
+    if any(s.get("name") == msg["name"] for s in sources):
+        connection.send_error(
+            msg["id"],
+            "duplicate_name",
+            f"A source named {msg['name']!r} already exists",
+        )
+        return
+
+    new_source = _normalize_source_input(msg)
+    sources.append(new_source)
+
+    new_options = dict(entry.options)
+    new_options[CONF_SOURCES] = sources
+    hass.config_entries.async_update_entry(entry, options=new_options)
+    await hass.config_entries.async_reload(entry.entry_id)
+
+    connection.send_result(msg["id"], {"success": True, "source": new_source})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/update_source",
+        vol.Required("id"): str,
+        **SOURCE_SCHEMA_FIELDS,
+    }
+)
+@websocket_api.async_response
+async def handle_update_source(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Update an existing source by id and reload."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+
+    source_id: str = msg["id"]
+    sources: list[dict[str, Any]] = list(entry.options.get(CONF_SOURCES, []))
+    target_index = next(
+        (i for i, s in enumerate(sources) if s.get("id") == source_id), None
+    )
+    if target_index is None:
+        connection.send_error(msg["id"], "not_found", "Source not found")
+        return
+
+    if any(s.get("name") == msg["name"] and s.get("id") != source_id for s in sources):
+        connection.send_error(
+            msg["id"],
+            "duplicate_name",
+            f"A source named {msg['name']!r} already exists",
+        )
+        return
+
+    updated = _normalize_source_input(msg, existing_id=source_id)
+    sources[target_index] = updated
+
+    new_options = dict(entry.options)
+    new_options[CONF_SOURCES] = sources
+    hass.config_entries.async_update_entry(entry, options=new_options)
+    await hass.config_entries.async_reload(entry.entry_id)
+
+    connection.send_result(msg["id"], {"success": True, "source": updated})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/remove_source",
+        vol.Required("id"): str,
+    }
+)
+@websocket_api.async_response
+async def handle_remove_source(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove a source by id and reload."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+
+    source_id: str = msg["id"]
+    sources: list[dict[str, Any]] = list(entry.options.get(CONF_SOURCES, []))
+    new_sources = [s for s in sources if s.get("id") != source_id]
+    if len(new_sources) == len(sources):
+        connection.send_result(msg["id"], {"success": True, "was_present": False})
+        return
+
+    new_options = dict(entry.options)
+    new_options[CONF_SOURCES] = new_sources
+    hass.config_entries.async_update_entry(entry, options=new_options)
+    await hass.config_entries.async_reload(entry.entry_id)
+
+    connection.send_result(msg["id"], {"success": True, "was_present": True})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "victoria_metrics/test_source",
+        vol.Required("query"): str,
+    }
+)
+@websocket_api.async_response
+async def handle_test_source(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Run a one-shot Victoria Metrics query and return the result."""
+    entry = _get_config_entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+
+    reader = VictoriaMetricsReader(
+        host=entry.data[CONF_HOST],
+        port=entry.data[CONF_PORT],
+        ssl=entry.data.get(CONF_SSL, False),
+        verify_ssl=entry.data.get(CONF_VERIFY_SSL, True),
+        token=entry.data.get(CONF_TOKEN) or None,
+    )
+    try:
+        result = await reader.query_instant(msg["query"])
+    finally:
+        await reader.close()
+
+    if result is None:
+        connection.send_result(
+            msg["id"], {"success": False, "reason": "no_data_or_error"}
+        )
+        return
+
+    value, labels, timestamp_s = result
+    connection.send_result(
+        msg["id"],
+        {
+            "success": True,
+            "value": value,
+            "labels": labels,
+            "timestamp": timestamp_s,
+        },
+    )
