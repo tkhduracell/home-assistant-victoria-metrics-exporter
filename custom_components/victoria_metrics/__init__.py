@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -393,8 +394,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 continue
             coordinator = _build_source_coordinator(hass, reader, src)
             source_coordinators[source_id] = coordinator
-            await coordinator.async_config_entry_first_refresh()
         if source_coordinators:
+            # Refresh concurrently so setup latency is bounded by the slowest
+            # source rather than the sum of all sources.
+            await asyncio.gather(
+                *(
+                    c.async_config_entry_first_refresh()
+                    for c in source_coordinators.values()
+                )
+            )
             _LOGGER.info(
                 "Configured %d Victoria Metrics source sensor(s)",
                 len(source_coordinators),

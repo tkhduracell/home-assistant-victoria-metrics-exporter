@@ -42,14 +42,27 @@ SOURCE_OPTIONAL_FIELDS = (
     "icon",
 )
 
-SOURCE_SCHEMA_FIELDS: dict[Any, Any] = {
-    vol.Required("name"): str,
-    vol.Required("query"): str,
+SOURCE_OPTIONAL_FIELD_SCHEMA: dict[Any, Any] = {
     vol.Optional("scan_interval"): vol.All(int, vol.Range(min=5, max=86400)),
     vol.Optional("unit_of_measurement"): vol.Any(str, None),
     vol.Optional("device_class"): vol.Any(str, None),
     vol.Optional("state_class"): vol.Any(str, None),
     vol.Optional("icon"): vol.Any(str, None),
+}
+
+# For add_source: name + query required.
+SOURCE_ADD_SCHEMA: dict[Any, Any] = {
+    vol.Required("name"): str,
+    vol.Required("query"): str,
+    **SOURCE_OPTIONAL_FIELD_SCHEMA,
+}
+
+# For update_source: every field is optional; omitted fields preserve the
+# existing stored value, explicit `null` on optional fields clears them.
+SOURCE_UPDATE_SCHEMA: dict[Any, Any] = {
+    vol.Optional("name"): str,
+    vol.Optional("query"): str,
+    **SOURCE_OPTIONAL_FIELD_SCHEMA,
 }
 
 
@@ -59,6 +72,22 @@ def _get_config_entry(hass: HomeAssistant) -> ConfigEntry | None:
     if not entries:
         return None
     return entries[0]
+
+
+def _resolve_entry(hass: HomeAssistant, msg: dict[str, Any]) -> ConfigEntry | None:
+    """Resolve the target config entry from an explicit `entry_id` or fall back.
+
+    Falls back to the first Victoria Metrics config entry when `entry_id` is
+    omitted, which preserves the single-entry behavior used elsewhere in this
+    module while letting multi-entry deployments target a specific entry.
+    """
+    requested = msg.get("entry_id")
+    if requested:
+        entry = hass.config_entries.async_get_entry(requested)
+        if entry is not None and entry.domain == DOMAIN:
+            return entry
+        return None
+    return _get_config_entry(hass)
 
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
@@ -330,12 +359,10 @@ async def handle_remove_entity(
 # ---------------------------------------------------------------------------
 
 
-def _normalize_source_input(
-    msg: dict[str, Any], existing_id: str | None = None
-) -> dict[str, Any]:
-    """Build a normalized source dict from a websocket message."""
+def _build_new_source(msg: dict[str, Any]) -> dict[str, Any]:
+    """Build a fresh source dict from an add_source message."""
     src: dict[str, Any] = {
-        "id": existing_id or uuid4().hex,
+        "id": uuid4().hex,
         "name": msg["name"],
         "query": msg["query"],
         "scan_interval": int(msg.get("scan_interval", DEFAULT_SCAN_INTERVAL)),
@@ -347,9 +374,36 @@ def _normalize_source_input(
     return src
 
 
+def _merge_source_update(
+    existing: dict[str, Any], msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge an update_source message into an existing source.
+
+    Omitted fields are preserved. Optional fields set to a falsy value
+    (`null`, empty string) are explicitly cleared. The `id` is immutable.
+    """
+    updated = dict(existing)
+    if "name" in msg:
+        updated["name"] = msg["name"]
+    if "query" in msg:
+        updated["query"] = msg["query"]
+    if "scan_interval" in msg:
+        updated["scan_interval"] = int(msg["scan_interval"])
+    for field in SOURCE_OPTIONAL_FIELDS:
+        if field not in msg:
+            continue
+        value = msg[field]
+        if value:
+            updated[field] = value
+        else:
+            updated.pop(field, None)
+    return updated
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "victoria_metrics/get_sources",
+        vol.Optional("entry_id"): str,
     }
 )
 @callback
@@ -359,7 +413,7 @@ def handle_get_sources(
     msg: dict[str, Any],
 ) -> None:
     """Return the list of configured Victoria Metrics source sensors."""
-    entry = _get_config_entry(hass)
+    entry = _resolve_entry(hass, msg)
     if entry is None:
         connection.send_error(msg["id"], "not_found", "No config entry found")
         return
@@ -371,9 +425,11 @@ def handle_get_sources(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "victoria_metrics/add_source",
-        **SOURCE_SCHEMA_FIELDS,
+        vol.Optional("entry_id"): str,
+        **SOURCE_ADD_SCHEMA,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def handle_add_source(
     hass: HomeAssistant,
@@ -381,7 +437,7 @@ async def handle_add_source(
     msg: dict[str, Any],
 ) -> None:
     """Add a new Victoria Metrics source sensor and reload."""
-    entry = _get_config_entry(hass)
+    entry = _resolve_entry(hass, msg)
     if entry is None:
         connection.send_error(msg["id"], "not_found", "No config entry found")
         return
@@ -395,7 +451,7 @@ async def handle_add_source(
         )
         return
 
-    new_source = _normalize_source_input(msg)
+    new_source = _build_new_source(msg)
     sources.append(new_source)
 
     new_options = dict(entry.options)
@@ -409,18 +465,24 @@ async def handle_add_source(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "victoria_metrics/update_source",
+        vol.Optional("entry_id"): str,
         vol.Required("id"): str,
-        **SOURCE_SCHEMA_FIELDS,
+        **SOURCE_UPDATE_SCHEMA,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def handle_update_source(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Update an existing source by id and reload."""
-    entry = _get_config_entry(hass)
+    """Update an existing source by id and reload.
+
+    Omitted fields are preserved. Optional fields can be cleared by sending
+    `null` (or an empty string).
+    """
+    entry = _resolve_entry(hass, msg)
     if entry is None:
         connection.send_error(msg["id"], "not_found", "No config entry found")
         return
@@ -434,15 +496,16 @@ async def handle_update_source(
         connection.send_error(msg["id"], "not_found", "Source not found")
         return
 
-    if any(s.get("name") == msg["name"] and s.get("id") != source_id for s in sources):
+    new_name = msg.get("name", sources[target_index].get("name"))
+    if any(s.get("name") == new_name and s.get("id") != source_id for s in sources):
         connection.send_error(
             msg["id"],
             "duplicate_name",
-            f"A source named {msg['name']!r} already exists",
+            f"A source named {new_name!r} already exists",
         )
         return
 
-    updated = _normalize_source_input(msg, existing_id=source_id)
+    updated = _merge_source_update(sources[target_index], msg)
     sources[target_index] = updated
 
     new_options = dict(entry.options)
@@ -456,9 +519,11 @@ async def handle_update_source(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "victoria_metrics/remove_source",
+        vol.Optional("entry_id"): str,
         vol.Required("id"): str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def handle_remove_source(
     hass: HomeAssistant,
@@ -466,7 +531,7 @@ async def handle_remove_source(
     msg: dict[str, Any],
 ) -> None:
     """Remove a source by id and reload."""
-    entry = _get_config_entry(hass)
+    entry = _resolve_entry(hass, msg)
     if entry is None:
         connection.send_error(msg["id"], "not_found", "No config entry found")
         return
@@ -489,9 +554,11 @@ async def handle_remove_source(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "victoria_metrics/test_source",
+        vol.Optional("entry_id"): str,
         vol.Required("query"): str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def handle_test_source(
     hass: HomeAssistant,
@@ -499,7 +566,7 @@ async def handle_test_source(
     msg: dict[str, Any],
 ) -> None:
     """Run a one-shot Victoria Metrics query and return the result."""
-    entry = _get_config_entry(hass)
+    entry = _resolve_entry(hass, msg)
     if entry is None:
         connection.send_error(msg["id"], "not_found", "No config entry found")
         return
