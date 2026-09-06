@@ -1,6 +1,6 @@
 [project]
 name = "victoria-metrics-exporter"
-version = "1.0.0"
+version = "1.0.1"
 description = "Victoria Metrics Exporter for Home Assistant"
 requires-python = ">=3.12"
 
