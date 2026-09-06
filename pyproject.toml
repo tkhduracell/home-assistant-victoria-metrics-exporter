@@ -16,6 +16,7 @@ ignore = [
     "ARG001",  # Unused function argument (HA platform signatures require them)
     "ARG002",  # Unused method argument (HA callback signatures require them)
     "COM812",  # Trailing comma missing (incompatible with formatter)
+    "CPY001",  # Missing copyright notice (this project ships no per-file header)
     "D107",    # Missing docstring in `__init__` (HA convention)
     "D203",    # no-blank-line-before-class (incompatible with D211)
     "D212",    # multi-line-summary-first-line (incompatible with D213)
