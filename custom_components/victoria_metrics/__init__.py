@@ -17,6 +17,7 @@ from homeassistant.core import (
     State,
     callback,
 )
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
@@ -339,13 +340,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     if not await writer.test_connection():
-        _LOGGER.error(
-            "Cannot connect to Victoria Metrics at %s:%s",
-            entry.data[CONF_HOST],
-            entry.data[CONF_PORT],
-        )
         await writer.close()
-        return False
+        # Raise rather than returning False: returning False marks the entry
+        # permanently failed (state setup_error) and Home Assistant never
+        # retries it, so a transient failure is fatal until someone reloads by
+        # hand. On a host reboot HA regularly starts before Victoria Metrics is
+        # accepting connections, which silently stopped every exported metric
+        # for 13 hours. ConfigEntryNotReady puts the entry in setup_retry and
+        # HA retries with backoff, and surfaces this message on the
+        # integrations page. Deliberately no log call here: HA logs the retry
+        # itself at debug level, and integrations are told not to log non-debug
+        # messages about it.
+        # https://developers.home-assistant.io/docs/integration_setup_failures/
+        raise ConfigEntryNotReady(
+            f"Cannot connect to Victoria Metrics at "
+            f"{entry.data[CONF_HOST]}:{entry.data[CONF_PORT]}"
+        )
 
     _LOGGER.info(
         "Connected to Victoria Metrics at %s:%s",
