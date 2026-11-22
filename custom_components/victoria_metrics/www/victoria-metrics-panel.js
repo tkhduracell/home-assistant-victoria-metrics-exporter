@@ -260,6 +260,26 @@ const STYLES = `
     font-size: 12px;
     color: var(--secondary-text-color);
   }
+  .preset-btn {
+    background: none;
+    border: 1px solid var(--divider-color);
+    color: var(--primary-text-color);
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .preset-btn:hover {
+    background: var(--table-row-alternative-background-color,
+                    rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04));
+  }
+  .preset-btn.active {
+    background: var(--primary-color);
+    color: var(--text-primary-color, #fff);
+    border-color: var(--primary-color);
+  }
   .remove-btn {
     background: none;
     border: none;
@@ -688,6 +708,9 @@ class VictoriaMetricsPanel extends HTMLElement {
     for (const r of rows) {
       const objId = r.sourceEntity.split(".", 2).pop();
       const autoMetricName = metricPrefix ? metricPrefix + "_" + objId : objId;
+      const presetActive = function (v) {
+        return r.batchInterval === v ? ' active' : '';
+      };
       const intervalCell =
         '<div class="interval-wrapper">' +
           '<input type="number" class="batch-interval-input"' +
@@ -695,6 +718,12 @@ class VictoriaMetricsPanel extends HTMLElement {
             ' min="10" max="3600" step="10"' +
             ' data-entity="' + escapeHtml(r.sourceEntity) + '">' +
           '<span class="batch-interval-suffix">s</span>' +
+          '<button type="button" class="preset-btn' + presetActive(60) + '"' +
+            ' data-entity="' + escapeHtml(r.sourceEntity) + '"' +
+            ' data-value="60">60s</button>' +
+          '<button type="button" class="preset-btn' + presetActive(300) + '"' +
+            ' data-entity="' + escapeHtml(r.sourceEntity) + '"' +
+            ' data-value="300">5m</button>' +
         '</div>';
 
       const displayName = this._formatDisplayName(r.sourceEntity);
@@ -755,15 +784,35 @@ class VictoriaMetricsPanel extends HTMLElement {
     // Batch interval handlers
     this._cardEl.querySelectorAll(".batch-interval-input").forEach(function (input) {
       var timer = null;
+      input.addEventListener("input", function () {
+        const wrapper = input.closest(".interval-wrapper");
+        const val = parseInt(input.value, 10);
+        self._syncPresetActive(wrapper, val);
+      });
       input.addEventListener("change", function () {
         const entityId = input.getAttribute("data-entity");
         const val = parseInt(input.value, 10);
         if (val >= 10 && val <= 3600) {
+          const wrapper = input.closest(".interval-wrapper");
+          self._syncPresetActive(wrapper, val);
           clearTimeout(timer);
           timer = setTimeout(function () {
             self._updateEntitySetting(entityId, { batch_interval: val });
           }, 500);
         }
+      });
+    });
+
+    // Batch interval preset button handlers
+    this._cardEl.querySelectorAll(".preset-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        const wrapper = btn.closest(".interval-wrapper");
+        const input = wrapper && wrapper.querySelector(".batch-interval-input");
+        if (!input) return;
+        const value = btn.getAttribute("data-value");
+        if (input.value === value) return;
+        input.value = value;
+        input.dispatchEvent(new Event("change"));
       });
     });
 
@@ -795,6 +844,14 @@ class VictoriaMetricsPanel extends HTMLElement {
       detail: { entityId: entityId },
     });
     this.dispatchEvent(event);
+  }
+
+  _syncPresetActive(wrapper, currentValue) {
+    if (!wrapper) return;
+    wrapper.querySelectorAll(".preset-btn").forEach(function (b) {
+      const v = parseInt(b.getAttribute("data-value"), 10);
+      b.classList.toggle("active", v === currentValue);
+    });
   }
 
   _showConfigOverlay() {
