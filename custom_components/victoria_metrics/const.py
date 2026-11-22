@@ -15,10 +15,12 @@ CONF_METRIC_PREFIX = "metric_prefix"
 CONF_BATCH_INTERVAL = "batch_interval"
 CONF_EXPORT_ENTITIES = "export_entities"
 CONF_ENTITY_SETTINGS = "entity_settings"
+CONF_SOURCES = "sources"
 
 DEFAULT_PORT = 8428
 DEFAULT_BATCH_INTERVAL = 300
 DEFAULT_METRIC_PREFIX = "ha"
+DEFAULT_SCAN_INTERVAL = 60
 
 PANEL_URL = "/victoria_metrics_panel"
 PANEL_COMPONENT_NAME = "victoria-metrics-panel"

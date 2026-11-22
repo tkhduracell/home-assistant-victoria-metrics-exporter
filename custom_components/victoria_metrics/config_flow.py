@@ -301,7 +301,10 @@ class VictoriaMetricsOptionsFlowHandler(OptionsFlowWithConfigEntry):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Finalize saving the options entry."""
-        return self.async_create_entry(data=self._user_input)
+        # Merge so keys this form doesn't manage (e.g. sources, per-entity
+        # settings managed via the websocket API) are preserved.
+        merged_options = {**self.options, **self._user_input}
+        return self.async_create_entry(data=merged_options)
 
     async def async_step_save_failed(
         self, user_input: dict[str, Any] | None = None
